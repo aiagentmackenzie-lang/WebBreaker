@@ -1,0 +1,34 @@
+; sleep 5
+| sleep 5
+& sleep 5
+&& sleep 5
+|| sleep 5
+`sleep 5`
+$(sleep 5)
+\n sleep 5
+;sleep 5
+|sleep 5
+; echo CMDI_MARKER
+| echo CMDI_MARKER
+& echo CMDI_MARKER
+&& echo CMDI_MARKER
+|id
+;id
+&id
+; whoami
+| whoami
+& whoami
+$(echo CMDI_MARKER)
+`echo CMDI_MARKER`
+; ec''ho CMDI_MARKER
+| ec''ho CMDI_MARKER
+; ec\ho CMDI_MARKER
+; ec%00ho CMDI_MARKER
+|cmd /c echo CMDI_MARKER
+;printf 'CMDI_MARKER'
+%0aecho CMDI_MARKER
+%0decho CMDI_MARKER
+; timeout 5
+| timeout 5
+& timeout 5
+&& timeout 5

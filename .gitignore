@@ -1,0 +1,9 @@
+node_modules/
+.pytest_cache/
+*.pyc
+__pycache__/
+*.db
+webbreaker.db
+dist/
+.env
+package-lock.json
