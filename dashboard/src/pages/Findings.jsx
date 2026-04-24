@@ -71,8 +71,8 @@ export default function Findings() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((f, i) => (
-                <tr key={i} className="border-b border-[var(--wb-border)]/50 hover:bg-white/5">
+              {filtered.map((f) => (
+                <tr key={f.id} className="border-b border-[var(--wb-border)]/50 hover:bg-white/5">
                   <td className="py-2 pr-4"><SeverityBadge severity={f.severity} /></td>
                   <td className="py-2 pr-4">{f.type}</td>
                   <td className="py-2 pr-4 font-mono text-xs max-w-xs truncate">{f.url}</td>

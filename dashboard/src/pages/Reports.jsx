@@ -96,8 +96,8 @@ export default function Reports() {
             <div>
               <h4 className="font-medium text-sm mb-1">Prioritized Findings</h4>
               <div className="space-y-1">
-                {triage.analysis.prioritized.slice(0, 10).map((p, i) => (
-                  <div key={i} className="flex gap-2 text-sm">
+                {triage.analysis.prioritized.slice(0, 10).map((p) => (
+                  <div key={p.index} className="flex gap-2 text-sm">
                     <span className={`font-bold ${p.priority === 'P1' ? 'text-[var(--wb-red)]' : p.priority === 'P2' ? 'text-[var(--wb-yellow)]' : 'text-[var(--wb-muted)]'}`}>{p.priority}</span>
                     <span className="text-[var(--wb-muted)]">{p.reason}</span>
                   </div>

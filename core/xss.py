@@ -152,8 +152,13 @@ class XSSScanner:
         for context, payloads in XSS_PAYLOADS.items():
             for payload in payloads:
                 # Create unique marker to detect exact reflection
-                marker = f"wb{hash(payload) % 99999}"
-                marked_payload = payload.replace("alert(1)", f"alert({marker})")
+                marker = f"wb{abs(hash(payload)) % 99999}"
+                if "alert(1)" in payload:
+                    marked_payload = payload.replace("alert(1)", f"alert({marker})")
+                elif payload.strip().startswith("<"):
+                    marked_payload = payload + f"<!--{marker}-->"
+                else:
+                    marked_payload = payload + f"/*{marker}*/"
 
                 if method == "GET":
                     test_params = dict(params_dict)
@@ -220,7 +225,6 @@ class XSSScanner:
                     ))
                     break
 
-        self.findings.extend(findings)
         return findings
 
     async def scan_dom(self, url: str) -> list[Finding]:
@@ -274,7 +278,6 @@ class XSSScanner:
                         timestamp=datetime.now(timezone.utc).isoformat(),
                     ))
 
-        self.findings.extend(findings)
         return findings
 
     async def scan_url(self, url: str, params: list[dict] = None) -> list[Finding]:

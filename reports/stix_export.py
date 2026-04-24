@@ -94,6 +94,7 @@ def generate_stix_bundle(findings: list[dict], target: str, scan_id: str) -> dic
 
         # Indicator object for payloads
         if finding.get("payload"):
+            url_for_stix = str(finding.get("url", "")).replace("'", "\\'")
             objects.append({
                 "type": "indicator",
                 "spec_version": "2.1",
@@ -101,7 +102,7 @@ def generate_stix_bundle(findings: list[dict], target: str, scan_id: str) -> dic
                 "created": now,
                 "modified": now,
                 "name": f"Payload: {finding['payload'][:50]}",
-                "pattern": f"[url:value = '{finding.get('url', '')}']",
+                "pattern": f"[url:value = '{url_for_stix}']",
                 "pattern_type": "stix",
                 "valid_from": now,
             })

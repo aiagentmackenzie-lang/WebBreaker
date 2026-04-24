@@ -41,8 +41,8 @@ export default function Recon() {
       <div>
         <h3 className="text-lg font-semibold mb-2">🌐 Discovered URLs ({recon.length})</h3>
         <div className="space-y-1 max-h-96 overflow-auto">
-          {recon.map((r, i) => (
-            <div key={i} className="flex items-center gap-3 py-1.5 px-3 bg-[var(--wb-surface)] rounded text-sm">
+          {recon.map((r) => (
+            <div key={r.id} className="flex items-center gap-3 py-1.5 px-3 bg-[var(--wb-surface)] rounded text-sm">
               <span className={`font-mono text-xs px-1.5 py-0.5 rounded ${r.status_code >= 400 ? 'bg-[var(--wb-red)]/20 text-[var(--wb-red)]' : 'bg-[var(--wb-green)]/20 text-[var(--wb-green)]'}`}>
                 {r.status_code || '---'}
               </span>

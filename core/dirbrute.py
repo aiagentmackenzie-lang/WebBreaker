@@ -149,7 +149,10 @@ class DirBruteScanner:
         for i in range(0, len(wordlist), batch_size):
             batch = wordlist[i:i + batch_size]
             tasks = [bounded_check(path) for path in batch]
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for r in results:
+                if isinstance(r, Exception):
+                    console.print(f"[dim]DirBrute error: {r}[/dim]")
 
         # Phase 2: Recursive scan of discovered directories
         if recursive:

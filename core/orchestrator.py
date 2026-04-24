@@ -107,6 +107,7 @@ class ScanOrchestrator:
             scan_modules = [m for m in modules if m != "recon"]
 
             for module_name in scan_modules:
+                findings_before = len(all_findings)
                 self._notify(module_name, f"Running {module_name.upper()} scan...")
 
                 if module_name == "sqli":
@@ -195,15 +196,12 @@ class ScanOrchestrator:
                         all_findings.extend(findings)
                     await scanner.close()
 
-                # Store findings in DB
-                for f in all_findings:
+                # Store findings in DB (only this module's new findings)
+                module_findings = all_findings[findings_before:]
+                for f in module_findings:
                     self.db.insert_finding(self.scan_id, f)
 
-                count = len([f for f in all_findings if f.finding_type.value == module_name.upper() or
-                            (module_name == "dirbrute" and f.finding_type == FindingType.DIRBRUTE) or
-                            (module_name == "headers" and f.finding_type == FindingType.HEADERS) or
-                            (module_name == "session" and f.finding_type == FindingType.SESSION) or
-                            (module_name == "fuzz" and f.finding_type == FindingType.FUZZ)])
+                count = len([f for f in module_findings if f.finding_type.name == module_name.upper()])
 
                 console.print(f"  [green]✓[/] {module_name.upper()}: {count} findings")
                 progress.update(task, advance=1)

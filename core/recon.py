@@ -123,6 +123,7 @@ class ReconScanner:
         """Crawl the target site up to configured depth."""
         queue = [(start_url, 0)]
         self.visited = set()
+        self.results = []
 
         while queue:
             url, depth = queue.pop(0)

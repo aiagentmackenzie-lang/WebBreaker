@@ -10,7 +10,8 @@ export async function apiFetch(path, options = {}) {
 }
 
 export function wsConnect(scanId, onMessage) {
-  const ws = new WebSocket(`ws://${location.host}/ws`);
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${protocol}//${location.host}/ws`);
   ws.onopen = () => ws.send(JSON.stringify({ type: 'subscribe', scanId }));
   ws.onmessage = (e) => {
     try { onMessage(JSON.parse(e.data)); } catch { /* ignore */ }

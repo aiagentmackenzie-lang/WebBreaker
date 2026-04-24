@@ -89,7 +89,7 @@ def scan(target, auth, modules, depth, threads, timeout, delay, proxy, auth_head
             scope=scope,
             authorized=True,
             stealth=stealth,
-            rate_limit=max(20, rate_limit // 5) if stealth else rate_limit,
+            rate_limit=max(5, rate_limit // 5) if stealth else rate_limit,
         )
     except PermissionError as e:
         console.print(f"[red]{e}[/]")
@@ -116,9 +116,15 @@ def scan(target, auth, modules, depth, threads, timeout, delay, proxy, auth_head
             "total_findings": len(findings),
             "findings": [f.to_dict() for f in findings],
         }
-        with open(output, "w") as f:
-            json.dump(results, f, indent=2, default=str)
-        console.print(f"\n[green]Results saved to {output}[/]")
+        if output == "-":
+            import sys
+            json.dump(results, sys.stdout, indent=2, default=str)
+            sys.stdout.write("\n")
+            console.print("\n[green]Results written to stdout[/]")
+        else:
+            with open(output, "w") as f:
+                json.dump(results, f, indent=2, default=str)
+            console.print(f"\n[green]Results saved to {output}[/]")
 
     # Exit code based on findings
     critical = sum(1 for f in findings if f.severity.value == "CRITICAL")

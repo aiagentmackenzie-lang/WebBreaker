@@ -142,7 +142,6 @@ class FuzzScanner:
                         timestamp=datetime.now(timezone.utc).isoformat(),
                     ))
 
-        self.findings.extend(findings)
         return findings
 
     async def discover_params(self, url: str) -> list[Finding]:
@@ -171,7 +170,6 @@ class FuzzScanner:
                     timestamp=datetime.now(timezone.utc).isoformat(),
                 ))
 
-        self.findings.extend(findings)
         return findings
 
     async def scan_url(self, url: str, params: list[dict] = None) -> list[Finding]:

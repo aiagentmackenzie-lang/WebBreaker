@@ -1,5 +1,6 @@
 """HTML Report generator — professional reports with embedded evidence."""
 
+import html
 import json
 from datetime import datetime, timezone
 
@@ -29,13 +30,13 @@ def generate_html_report(scan_data: dict, findings: list[dict], recon: list[dict
         color = severity_colors.get(f.get("severity", "INFO"), "#94a3b8")
         findings_rows += f"""
         <tr>
-          <td><span style="color:{color};font-weight:bold">{f.get('severity','')}</span></td>
-          <td>{f.get('type','')}</td>
-          <td><code>{f.get('url','')}</code></td>
-          <td>{f.get('parameter','')}</td>
-          <td><code>{f.get('payload','')[:60]}</code></td>
-          <td>{f.get('evidence','')[:80]}</td>
-          <td>{f.get('remediation','')[:80]}</td>
+          <td><span style="color:{color};font-weight:bold">{html.escape(str(f.get('severity','')))}</span></td>
+          <td>{html.escape(str(f.get('type','')))}</td>
+          <td><code>{html.escape(str(f.get('url','')))}</code></td>
+          <td>{html.escape(str(f.get('parameter','')))}</td>
+          <td><code>{html.escape(str(f.get('payload',''))[:60])}</code></td>
+          <td>{html.escape(str(f.get('evidence',''))[:80])}</td>
+          <td>{html.escape(str(f.get('remediation',''))[:80])}</td>
           <td>{int(f.get('confidence',1)*100)}%</td>
         </tr>"""
 
@@ -44,19 +45,19 @@ def generate_html_report(scan_data: dict, findings: list[dict], recon: list[dict
         for r in recon[:50]:
             recon_rows += f"""
         <tr>
-          <td><code>{r.get('url','')}</code></td>
-          <td>{r.get('status_code','')}</td>
-          <td>{r.get('method','GET')}</td>
-          <td>{r.get('content_length',0)}</td>
-          <td>{r.get('tech','')}</td>
-          <td>{r.get('depth',0)}</td>
+          <td><code>{html.escape(str(r.get('url','')))}</code></td>
+          <td>{html.escape(str(r.get('status_code','')))}</td>
+          <td>{html.escape(str(r.get('method','GET')))}</td>
+          <td>{html.escape(str(r.get('content_length',0)))}</td>
+          <td>{html.escape(str(r.get('tech','')))}</td>
+          <td>{html.escape(str(r.get('depth',0)))}</td>
         </tr>"""
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>WebBreaker Security Report — {scan_data.get('target','')}</title>
+<title>WebBreaker Security Report — {html.escape(scan_data.get('target',''))}</title>
 <style>
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #f1f5f9; padding: 40px; }}
@@ -81,13 +82,13 @@ def generate_html_report(scan_data: dict, findings: list[dict], recon: list[dict
 <div class="container">
   <h1>🔥 WebBreaker Security Report</h1>
   <div class="meta">
-    <strong>Target:</strong> {scan_data.get('target','')} &nbsp;|&nbsp;
-    <strong>Scan ID:</strong> {scan_data.get('id','')} &nbsp;|&nbsp;
+    <strong>Target:</strong> {html.escape(scan_data.get('target',''))} &nbsp;|&nbsp;
+    <strong>Scan ID:</strong> {html.escape(scan_data.get('id',''))} &nbsp;|&nbsp;
     <strong>Date:</strong> {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} &nbsp;|&nbsp;
-    <strong>Status:</strong> {scan_data.get('status','')}
+    <strong>Status:</strong> {html.escape(scan_data.get('status',''))}
   </div>
 
-  {"<div class='ai-summary'><strong>🤖 AI Executive Summary</strong><br/>" + ai_summary + "</div>" if ai_summary else ""}
+  {"<div class='ai-summary'><strong>🤖 AI Executive Summary</strong><br/>" + html.escape(ai_summary) + "</div>" if ai_summary else ""}
 
   <h2>📊 Summary</h2>
   <div class="stats">

@@ -68,7 +68,7 @@ OUTPUT_PAYLOADS = [
 BYPASS_PAYLOADS = [
     "; ec''ho CMDI_WEBBREAKER_7341",
     "| ec''ho CMDI_WEBBREAKER_7341",
-    "; ec\ho CMDI_WEBBREAKER_7341",
+    r"; ec\ho CMDI_WEBBREAKER_7341",
     "; ec%00ho CMDI_WEBBREAKER_7341",
     "|cmd /c echo CMDI_WEBBREAKER_7341",
     ";printf 'CMDI_WEBBREAKER_7341'",
@@ -238,7 +238,7 @@ class CmdiScanner:
                     ))
                     break
 
-        self.findings.extend(findings)
+        self.findings = findings
         return findings
 
     async def scan_url(self, url: str, params: list[dict] = None) -> list[Finding]:

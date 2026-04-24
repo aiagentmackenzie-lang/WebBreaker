@@ -135,7 +135,7 @@ class LFIScanner:
                 ))
                 break  # Found, no need to test more for this param
 
-        self.findings.extend(findings)
+        self.findings = findings
         return findings
 
     async def scan_url(self, url: str, params: list[dict] = None) -> list[Finding]:

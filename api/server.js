@@ -15,14 +15,13 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ─── Database ──────────────────────────────────────────────────────
-const DB_PATH = process.env.WEBBREAKER_DB || path.join(__dirname, '..', 'webbreaker.db');
+const DB_PATH = process.env.WEBBREAKER_DB || path.join(process.cwd(), 'webbreaker.db');
 
-let db;
+const db = new Database(DB_PATH);
 try {
-  db = new Database(DB_PATH);
   db.pragma('journal_mode = WAL');
-} catch {
-  db = new Database(DB_PATH);
+} catch (err) {
+  console.warn('WAL pragma failed:', err.message);
 }
 
 db.exec(`
@@ -143,7 +142,7 @@ app.post('/scan', async (req, reply) => {
 
   // Spawn Python scanner process
   const cliPath = path.join(__dirname, '..', 'cli.py');
-  const args = ['scan', target, '--auth', '--output', '/dev/stdout',
+  const args = ['scan', target, '--auth', '--output', '-',
     '--modules', (modules || 'all').toString(),
     '--depth', String(depth || 3),
     '--threads', String(threads || 20),
@@ -153,7 +152,7 @@ app.post('/scan', async (req, reply) => {
   if (stealth) args.push('--stealth');
   if (rateLimit) args.push('--rate-limit', String(rateLimit));
 
-  const proc = spawn('python3', [cliPath, ...args], { detached: true, stdio: 'pipe' });
+  const proc = spawn('python3', [cliPath, ...args], { detached: true, stdio: 'pipe', cwd: path.join(__dirname, '..') });
 
   let output = '';
   proc.stdout?.on('data', (d) => {
@@ -166,7 +165,11 @@ app.post('/scan', async (req, reply) => {
   });
 
   proc.on('close', (code) => {
-    const status = code === 0 ? 'completed' : code === 1 ? 'completed_with_high' : 'error';
+    // Clean up stdio to avoid pipe leaks
+    proc.stdout?.destroy();
+    proc.stderr?.destroy();
+
+    const status = code === 0 ? 'completed' : code === 1 ? 'completed_with_high' : code === 2 ? 'completed_with_critical' : 'error';
     // Count findings from DB
     const findings = stmts.getFindings.all(scanId);
     stmts.updateScan.run(status, findings.length, new Date().toISOString(), scanId);
@@ -229,6 +232,57 @@ app.post('/scan/:id/report', async (req, reply) => {
   for (const f of findings) {
     report.bySeverity[f.severity] = (report.bySeverity[f.severity] || 0) + 1;
     report.byType[f.type] = (report.byType[f.type] || 0) + 1;
+  }
+
+  if (format === 'stix') {
+    const now = new Date().toISOString();
+    const ATTACK_MAP = {
+      'SQL Injection': { attack: 'T1190', capec: 'CAPEC-108', name: 'Exploit Public-Facing Application' },
+      'Cross-Site Scripting': { attack: 'T1059.007', capec: 'CAPEC-63', name: 'XSS' },
+      'CSRF': { capec: 'CAPEC-62', name: 'Cross-Site Request Forgery' },
+      'Command Injection': { attack: 'T1190', capec: 'CAPEC-88', name: 'OS Command Injection' },
+      'Local File Inclusion': { attack: 'T1083', capec: 'CAPEC-31', name: 'Path Traversal' },
+      'Remote File Inclusion': { attack: 'T1083', capec: 'CAPEC-31', name: 'Remote File Inclusion' },
+      'Parameter Fuzzing': { attack: 'T1595', name: 'Active Scanning' },
+      'Security Headers': { attack: 'T1595', name: 'Configuration Weakness' },
+      'Session Analysis': { attack: 'T1539', name: 'Steal Session' },
+      'Directory Discovery': { attack: 'T1083', capec: 'CAPEC-116', name: 'Directory Discovery' },
+    };
+    const objects = [{
+      type: 'identity', spec_version: '2.1', id: 'identity--webbreaker-1-0-0',
+      created: now, modified: now, name: 'WebBreaker', identity_class: 'software',
+    }, {
+      type: 'infrastructure', spec_version: '2.1', id: `infrastructure--${req.params.id}`,
+      created: now, modified: now, name: `Assessed Target: ${scan.target}`, infrastructure_types: ['targeted'],
+    }];
+    for (let i = 0; i < findings.length; i++) {
+      const f = findings[i];
+      const mapping = ATTACK_MAP[f.type] || { name: f.type };
+      const vulnId = `vulnerability--${req.params.id}-${String(i).padStart(4, '0')}`;
+      const attackId = `attack-pattern--${req.params.id}-${String(i).padStart(4, '0')}`;
+      const extRefs = [{ source_name: 'url', url: f.url }];
+      if (mapping.attack) extRefs.push({ source_name: 'mitre-attack', external_id: mapping.attack });
+      if (mapping.capec) extRefs.push({ source_name: 'capec', external_id: mapping.capec });
+      objects.push({
+        type: 'vulnerability', spec_version: '2.1', id: vulnId, created: now, modified: now,
+        name: `${f.type}: ${f.parameter}`, description: f.evidence, severity: f.severity.toLowerCase(), external_references: extRefs,
+      });
+      objects.push({
+        type: 'attack-pattern', spec_version: '2.1', id: attackId, created: now, modified: now, name: mapping.name,
+      });
+      objects.push({
+        type: 'relationship', spec_version: '2.1', id: `relationship--${req.params.id}-${String(i).padStart(4, '0')}-targets`,
+        created: now, modified: now, relationship_type: 'targets', source_ref: vulnId, target_ref: `infrastructure--${req.params.id}`,
+      });
+      if (f.payload) {
+        objects.push({
+          type: 'indicator', spec_version: '2.1', id: `indicator--${req.params.id}-${String(i).padStart(4, '0')}`,
+          created: now, modified: now, name: `Payload: ${f.payload.slice(0, 50)}`,
+          pattern: `[url:value = '${(f.url || '').replace(/'/g, "\\'")}']`, pattern_type: 'stix', valid_from: now,
+        });
+      }
+    }
+    return { type: 'bundle', id: `bundle--${req.params.id}`, objects };
   }
 
   return report;

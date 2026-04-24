@@ -1,5 +1,6 @@
 """CSRF Detection module — finds missing tokens, weak tokens, and builds PoCs."""
 
+import html
 import re
 import asyncio
 from urllib.parse import urlparse, urljoin
@@ -100,24 +101,38 @@ class CSRFScanner:
 
     async def _check_referer_validation(self, url: str, form_action: str) -> bool:
         """Test if the endpoint validates Origin/Referer headers."""
-        # Send request without Referer
-        headers_no_referer = {"Referer": "", "Origin": ""}
-        resp = await self.client.post(form_action, headers=headers_no_referer, data={"test": "1"})
-        if not resp:
+        # Baseline: request with normal headers
+        baseline = await self.client.post(form_action, data={"test": "1"})
+        if not baseline:
             return False
 
-        no_referer_ok = resp.status_code < 400
+        baseline_status = baseline.status_code
+        baseline_len = len(baseline.content)
 
-        # Send request with foreign Referer
-        headers_foreign = {"Referer": "https://evil.com", "Origin": "https://evil.com"}
-        resp2 = await self.client.post(form_action, headers=headers_foreign, data={"test": "1"})
-        if not resp2:
+        # If baseline itself fails, can't test meaningfully
+        if baseline_status >= 400:
             return False
 
-        foreign_ok = resp2.status_code < 400
+        # Request without Referer
+        resp_no_ref = await self.client.post(form_action, headers={"Referer": "", "Origin": ""}, data={"test": "1"})
+        if not resp_no_ref:
+            return False
 
-        # If both succeed without proper Referer, validation is weak
-        return no_referer_ok and foreign_ok
+        # Request with foreign Referer
+        resp_foreign = await self.client.post(form_action, headers={"Referer": "https://evil.com", "Origin": "https://evil.com"}, data={"test": "1"})
+        if not resp_foreign:
+            return False
+
+        # Weak validation = both bypasses succeed with same status and similar body as baseline
+        def _matches_baseline(resp):
+            if not resp:
+                return False
+            return (
+                resp.status_code == baseline_status and
+                abs(len(resp.content) - baseline_len) < 100
+            )
+
+        return _matches_baseline(resp_no_ref) and _matches_baseline(resp_foreign)
 
     def _generate_poc_html(self, form: dict, target_origin: str) -> str:
         """Generate a CSRF PoC HTML page."""
@@ -126,10 +141,10 @@ class CSRFScanner:
             name = field.get("name", "")
             value = field.get("value", "")
             if name.lower() not in CSRF_TOKEN_NAMES:
-                fields_html += f'    <input type="hidden" name="{name}" value="{value}" />\n'
+                fields_html += f'    <input type="hidden" name="{html.escape(str(name), quote=True)}" value="{html.escape(str(value), quote=True)}" />\n'
 
-        method = form.get("method", "POST")
-        action = form.get("action", "")
+        method = html.escape(str(form.get("method", "POST")), quote=True)
+        action = html.escape(str(form.get("action", "")), quote=True)
 
         poc = f"""<!DOCTYPE html>
 <html>

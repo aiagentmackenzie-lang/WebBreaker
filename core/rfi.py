@@ -1,5 +1,6 @@
 """Remote File Inclusion scanner — RFI detection with callback server support."""
 
+import os
 import asyncio
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from datetime import datetime, timezone
@@ -10,8 +11,9 @@ from .http_client import HttpClient
 
 
 # RFI payloads — use a controlled callback domain
-# In production, set WEBBREAKER_CALLBACK_URL to your collaborator instance
-CALLBACK_DOMAIN = "webbreaker-callback.test"  # Replace with actual callback server
+# In production, set WEBBREAKER_CALLBACK_URL or WEBBREAKER_CALLBACK_DOMAIN env var
+CALLBACK_DOMAIN = os.environ.get("WEBBREAKER_CALLBACK_DOMAIN", "webbreaker-callback.test")
+CALLBACK_URL = os.environ.get("WEBBREAKER_CALLBACK_URL")
 
 RFI_PAYLOADS = [
     f"http://{CALLBACK_DOMAIN}/rfi_test.txt",
@@ -111,7 +113,7 @@ class RFIScanner:
                 ))
                 break
 
-        self.findings.extend(findings)
+        self.findings = findings
         return findings
 
     async def scan_url(self, url: str, params: list[dict] = None) -> list[Finding]:

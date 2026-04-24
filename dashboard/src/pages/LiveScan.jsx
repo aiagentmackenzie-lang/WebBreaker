@@ -78,7 +78,7 @@ export default function LiveScan() {
       <div>
         <h3 className="text-lg font-semibold mb-3">🚨 Findings ({findings.length})</h3>
         <div className="space-y-2 max-h-96 overflow-auto">
-          {findings.map((f, i) => <FindingCard key={i} finding={f} />)}
+          {findings.map((f, i) => <FindingCard key={f.id ?? i} finding={f} />)}
           {!findings.length && <div className="text-[var(--wb-muted)] text-sm">No findings yet...</div>}
         </div>
       </div>
@@ -87,7 +87,7 @@ export default function LiveScan() {
       <div>
         <h3 className="text-lg font-semibold mb-3">📋 Scan Log</h3>
         <div className="bg-black/50 rounded-lg p-3 font-mono text-xs text-green-400 h-64 overflow-auto">
-          {logs.map((log, i) => <div key={i}>{log}</div>)}
+          {logs.map((log, i) => <div key={log.slice(0, 40) + i}>{log}</div>)}
           <div ref={logEndRef} />
         </div>
       </div>
