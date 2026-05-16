@@ -105,6 +105,18 @@ class ScanConfig:
     stealth: bool = False
     rate_limit: int = 100  # requests per second
     no_verify_tls: bool = False  # Default: verify TLS. Use --no-verify-tls to disable.
+    # ── Authentication fields ──
+    auth_type: Optional[str] = None  # "basic", "form", "session"
+    auth_url: Optional[str] = None  # Login URL for form/session auth
+    auth_username: Optional[str] = None
+    auth_password: Optional[str] = None
+    auth_username_field: str = "username"  # Form field name for username
+    auth_password_field: str = "password"  # Form field name for password
+    auth_csrf_field: Optional[str] = None  # CSRF token field name (auto-detect if None)
+    auth_method: str = "POST"  # HTTP method for login form
+    auth_success_pattern: Optional[str] = None  # Regex for success detection
+    auth_failure_pattern: Optional[str] = None  # Regex for failure detection
+    auth_max_retries: int = 3  # Max session refresh retries
 
     def __post_init__(self):
         if not self.authorized:

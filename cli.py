@@ -40,13 +40,23 @@ def cli():
 @click.option("--proxy", default=None, help="HTTP proxy URL (e.g., http://127.0.0.1:8080)")
 @click.option("--auth-header", default=None, help="Authorization header value (e.g., 'Bearer TOKEN')")
 @click.option("--cookie", "-c", multiple=True, help="Cookies (format: name=value)")
+@click.option("--auth-type", default=None, type=click.Choice(["basic", "form", "session"]), help="Authentication type: basic, form, session")
+@click.option("--auth-url", default=None, help="Login URL for form/session auth")
+@click.option("--auth-username", default=None, help="Username for authentication")
+@click.option("--auth-password", default=None, help="Password for authentication")
+@click.option("--auth-username-field", default="username", help="Form field name for username (default: username)")
+@click.option("--auth-password-field", default="password", help="Form field name for password (default: password)")
+@click.option("--auth-csrf-field", default=None, help="CSRF token field name (auto-detect if not set)")
+@click.option("--auth-method", default="POST", type=click.Choice(["GET", "POST"]), help="HTTP method for login form (default: POST)")
+@click.option("--auth-success-pattern", default=None, help="Regex pattern for successful login detection")
+@click.option("--auth-failure-pattern", default=None, help="Regex pattern for failed login detection")
 @click.option("--scope", default=None, help="Scope boundary URL (default: same as target)")
 @click.option("--stealth", is_flag=True, help="Stealth mode: slower, randomized timing")
 @click.option("--rate-limit", default=100, type=int, help="Max requests per second (default: 100)")
 @click.option("--no-verify-tls", is_flag=True, help="Disable TLS certificate verification (NOT recommended for production)")
 @click.option("--output", "-o", default=None, help="Output file (JSON format)")
 @click.option("--db", default="webbreaker.db", help="Database file path (default: webbreaker.db)")
-def scan(target, auth, modules, depth, threads, timeout, delay, proxy, auth_header, cookie, scope, stealth, rate_limit, no_verify_tls, output, db):
+def scan(target, auth, modules, depth, threads, timeout, delay, proxy, auth_header, cookie, auth_type, auth_url, auth_username, auth_password, auth_username_field, auth_password_field, auth_csrf_field, auth_method, auth_success_pattern, auth_failure_pattern, scope, stealth, rate_limit, no_verify_tls, output, db):
     """Run a full web application pentest scan against TARGET."""
     print_banner()
 
@@ -92,6 +102,16 @@ def scan(target, auth, modules, depth, threads, timeout, delay, proxy, auth_head
             stealth=stealth,
             rate_limit=max(5, rate_limit // 5) if stealth else rate_limit,
             no_verify_tls=no_verify_tls,
+            auth_type=auth_type,
+            auth_url=auth_url,
+            auth_username=auth_username,
+            auth_password=auth_password,
+            auth_username_field=auth_username_field or "username",
+            auth_password_field=auth_password_field or "password",
+            auth_csrf_field=auth_csrf_field,
+            auth_method=auth_method or "POST",
+            auth_success_pattern=auth_success_pattern,
+            auth_failure_pattern=auth_failure_pattern,
         )
     except PermissionError as e:
         console.print(f"[red]{e}[/]")

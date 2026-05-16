@@ -1,8 +1,6 @@
 """Scan Orchestrator — coordinates all scanner modules in a unified workflow."""
 
-import asyncio
 import uuid
-from datetime import datetime, timezone
 from typing import Optional, Callable
 
 from rich.console import Console
@@ -10,7 +8,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskPr
 from rich.table import Table
 from rich.panel import Panel
 
-from .config import ScanConfig, Finding, Severity, FindingType
+from .config import ScanConfig, Finding, Severity
 from .database import Database
 from .http_client import HttpClient
 from .recon import ReconScanner
@@ -63,10 +61,27 @@ class ScanOrchestrator:
             "threads": self.config.threads,
         })
 
-        console.print(f"\n[bold red]🔥 WebBreaker[/] — Web Application Pentest Toolkit")
+        console.print("\n[bold red]🔥 WebBreaker[/] — Web Application Pentest Toolkit")
         console.print(f"[dim]Scan ID: {self.scan_id}[/dim]")
         console.print(f"[bold]Target:[/] {self.config.target}")
         console.print(f"[bold]Modules:[/] {', '.join(modules)}\n")
+
+        # ── Authenticate if configured ────────────────────────────
+        if self.config.auth_type:
+            from .auth import create_auth
+            auth_handler = create_auth(self.config)
+            if auth_handler:
+                console.print(f"[bold]Auth:[/] {auth_handler}")
+                auth_client = HttpClient(self.config)
+                try:
+                    result = await auth_handler.login(auth_client)
+                    if not result:
+                        console.print(f"[red]\u2717 Authentication failed: {result.message}[/]")
+                        console.print("[dim]Continuing without authentication...[/]")
+                    else:
+                        console.print(f"[green]\u2713[/] {result.message}")
+                finally:
+                    await auth_client.close()
 
         all_findings = []
 
