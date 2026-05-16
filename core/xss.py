@@ -274,9 +274,10 @@ class XSSScanner:
             if js_resp:
                 dom_results = self._detect_dom_xss(js_resp.text)
                 for result in dom_results:
+                    js_severity = Severity.HIGH if result["risk"] == "HIGH" else Severity.MEDIUM
                     findings.append(Finding(
                         finding_type=FindingType.XSS,
-                        severity=severity,
+                        severity=js_severity,
                         url=js_url, parameter="[external JS]", payload="DOM XSS",
                         evidence=f"Sources: {result['sources']}, Sinks: {result['sinks']}",
                         remediation="Sanitize DOM sources before passing to sinks. Review JS dependencies.",

@@ -43,9 +43,10 @@ def cli():
 @click.option("--scope", default=None, help="Scope boundary URL (default: same as target)")
 @click.option("--stealth", is_flag=True, help="Stealth mode: slower, randomized timing")
 @click.option("--rate-limit", default=100, type=int, help="Max requests per second (default: 100)")
+@click.option("--no-verify-tls", is_flag=True, help="Disable TLS certificate verification (NOT recommended for production)")
 @click.option("--output", "-o", default=None, help="Output file (JSON format)")
 @click.option("--db", default="webbreaker.db", help="Database file path (default: webbreaker.db)")
-def scan(target, auth, modules, depth, threads, timeout, delay, proxy, auth_header, cookie, scope, stealth, rate_limit, output, db):
+def scan(target, auth, modules, depth, threads, timeout, delay, proxy, auth_header, cookie, scope, stealth, rate_limit, no_verify_tls, output, db):
     """Run a full web application pentest scan against TARGET."""
     print_banner()
 
@@ -90,6 +91,7 @@ def scan(target, auth, modules, depth, threads, timeout, delay, proxy, auth_head
             authorized=True,
             stealth=stealth,
             rate_limit=max(5, rate_limit // 5) if stealth else rate_limit,
+            no_verify_tls=no_verify_tls,
         )
     except PermissionError as e:
         console.print(f"[red]{e}[/]")

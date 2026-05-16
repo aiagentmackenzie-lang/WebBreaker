@@ -26,6 +26,9 @@ class FindingType(Enum):
     SESSION = "Session Analysis"
 
 
+
+
+
 @dataclass
 class Finding:
     finding_type: FindingType
@@ -57,6 +60,35 @@ class Finding:
 
 
 @dataclass
+class ScanResult:
+    """Unified scan result with timing, status, and error tracking."""
+    scan_id: str
+    target: str
+    status: str = "pending"  # pending, running, completed, error, partial
+    started_at: str = ""
+    completed_at: str = ""
+    total_requests: int = 0
+    error_count: int = 0
+    timeout_count: int = 0
+    scope_blocked_count: int = 0
+    errors: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "scan_id": self.scan_id,
+            "target": self.target,
+            "status": self.status,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "total_requests": self.total_requests,
+            "error_count": self.error_count,
+            "timeout_count": self.timeout_count,
+            "scope_blocked_count": self.scope_blocked_count,
+            "errors": self.errors,
+        }
+
+
+@dataclass
 class ScanConfig:
     target: str
     modules: list[str] = field(default_factory=list)
@@ -72,6 +104,7 @@ class ScanConfig:
     authorized: bool = False
     stealth: bool = False
     rate_limit: int = 100  # requests per second
+    no_verify_tls: bool = False  # Default: verify TLS. Use --no-verify-tls to disable.
 
     def __post_init__(self):
         if not self.authorized:

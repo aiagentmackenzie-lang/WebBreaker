@@ -40,6 +40,7 @@ class CSRFScanner:
     def _check_token_predictability(self, form: dict) -> Optional[str]:
         """Check if CSRF tokens appear predictable or reused."""
         token_fields = []
+        issues: list[str] = []
         for field in form["fields"]:
             name_lower = field.get("name", "").lower()
             if name_lower in CSRF_TOKEN_NAMES:

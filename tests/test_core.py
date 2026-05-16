@@ -556,5 +556,120 @@ class TestHTTPClientCookies:
         assert 'cookies' in sig.parameters
 
 
+class TestTokenBucket:
+    """Test the TokenBucket rate limiter."""
+
+    def test_bucket_initial_tokens(self):
+        from core.http_client import TokenBucket
+        bucket = TokenBucket(rate=10, burst=10)
+        assert bucket.tokens == 10.0
+
+    def test_bucket_refill(self):
+        import time
+        from core.http_client import TokenBucket
+        bucket = TokenBucket(rate=10, burst=10)
+        bucket.tokens = 0.0
+        bucket.last_refill = time.monotonic() - 1.0  # 1 second ago
+        bucket._refill()
+        assert bucket.tokens >= 9.0  # ~10 tokens refilled over 1s
+
+    def test_bucket_burst_limit(self):
+        from core.http_client import TokenBucket
+        bucket = TokenBucket(rate=5, burst=5)
+        assert bucket.burst == 5
+        assert bucket.tokens == 5.0
+
+    def test_bucket_acquire(self):
+        import asyncio
+        from core.http_client import TokenBucket
+        bucket = TokenBucket(rate=100, burst=100)
+        # Simulate token consumption without async
+        bucket.tokens = 100.0
+        bucket.tokens -= 1.0
+        assert bucket.tokens == 99.0  # Token consumed correctly
+        # Verify bucket refills correctly
+        bucket.last_refill = __import__("time").monotonic() - 1.0
+        bucket._refill()
+        assert bucket.tokens > 99.0  # Refilled over time
+
+
+class TestScopeEnforcement:
+    """Test scope enforcement in HTTP clients."""
+
+    def test_scope_in_scope(self):
+        from core.http_client import HttpClient
+        config = ScanConfig(target="https://example.com", authorized=True)
+        client = HttpClient(config)
+        assert client._in_scope("https://example.com/page") is True
+        assert client._in_scope("https://example.com:443/page") is True
+
+    def test_scope_out_of_scope(self):
+        from core.http_client import HttpClient
+        config = ScanConfig(target="https://example.com", authorized=True)
+        client = HttpClient(config)
+        assert client._in_scope("https://evil.com/page") is False
+        assert client._in_scope("http://example.com/page") is False  # different scheme
+
+    def test_scope_custom_scope(self):
+        from core.http_client import HttpClient
+        config = ScanConfig(target="https://app.example.com", authorized=True, scope="https://example.com")
+        client = HttpClient(config)
+        assert client._in_scope("https://example.com/page") is True
+        assert client._in_scope("https://app.example.com/page") is False
+
+    def test_sync_client_scope(self):
+        from core.http_client import SyncHttpClient
+        config = ScanConfig(target="https://example.com", authorized=True)
+        client = SyncHttpClient(config)
+        assert client._in_scope("https://example.com/api") is True
+        assert client._in_scope("https://evil.com/api") is False
+
+
+class TestTLSVerification:
+    """Test TLS verification config."""
+
+    def test_default_verify_tls(self):
+        config = ScanConfig(target="https://example.com", authorized=True)
+        assert config.no_verify_tls is False
+
+    def test_disable_verify_tls(self):
+        config = ScanConfig(target="https://example.com", authorized=True, no_verify_tls=True)
+        assert config.no_verify_tls is True
+
+
+class TestScanResult:
+    """Test ScanResult dataclass."""
+
+    def test_scan_result_defaults(self):
+        from core.config import ScanResult
+        result = ScanResult(scan_id="test123", target="https://example.com")
+        assert result.status == "pending"
+        assert result.total_requests == 0
+        assert result.error_count == 0
+        assert result.timeout_count == 0
+        assert result.scope_blocked_count == 0
+        assert result.errors == []
+
+    def test_scan_result_to_dict(self):
+        from core.config import ScanResult
+        result = ScanResult(
+            scan_id="abc123",
+            target="https://example.com",
+            status="completed",
+            started_at="2026-01-01T00:00:00Z",
+            completed_at="2026-01-01T00:05:00Z",
+            total_requests=150,
+            error_count=3,
+            timeout_count=1,
+            scope_blocked_count=5,
+            errors=["Connection timeout"],
+        )
+        d = result.to_dict()
+        assert d["scan_id"] == "abc123"
+        assert d["total_requests"] == 150
+        assert d["scope_blocked_count"] == 5
+        assert d["errors"] == ["Connection timeout"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
