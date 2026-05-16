@@ -31,9 +31,9 @@ ALL_MODULES = ["recon", "sqli", "xss", "csrf", "cmdi", "lfi", "rfi", "dirbrute",
 class ScanOrchestrator:
     """Coordinates the full web application pentest scan."""
 
-    def __init__(self, config: ScanConfig, db_path: str = "webbreaker.db"):
+    def __init__(self, config: ScanConfig, db_path: str = "webbreaker.db", scan_id: str = None):
         self.config = config
-        self.scan_id = str(uuid.uuid4())[:8]
+        self.scan_id = scan_id or str(uuid.uuid4())[:8]
         self.db = Database(db_path)
         self.db.connect()
         self.findings: list[Finding] = []

@@ -1,6 +1,10 @@
 /**
  * WebBreaker API Server — Fastify REST API + WebSocket
  * Provides programmatic access to scans, findings, reports, and AI triage.
+ *
+ * Authentication: API key via WEBBREAKER_API_KEY env var.
+ * Set WEBBREAKER_API_KEY to enable auth. Requests must include
+ * X-API-Key header or ?api_key= query param. Unset = no auth.
  */
 
 import Fastify from 'fastify';
@@ -9,6 +13,7 @@ import websocket from '@fastify/websocket';
 import Database from 'better-sqlite3';
 import { v4 as uuidv4 } from 'uuid';
 import { spawn } from 'child_process';
+import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -93,6 +98,113 @@ const app = Fastify({ logger: true });
 await app.register(cors, { origin: true });
 await app.register(websocket);
 
+// ─── Configuration ─────────────────────────────────────────────────
+const API_KEY = process.env.WEBBREAKER_API_KEY || '';  // Empty = no auth
+const RATE_LIMIT_WINDOW = 60_000;  // 1 minute
+const RATE_LIMIT_MAX = 100;         // 100 requests per minute per IP
+const VALID_MODULES = ['recon', 'sqli', 'xss', 'csrf', 'cmdi', 'lfi', 'rfi', 'dirbrute', 'fuzz', 'headers', 'session'];
+const VALID_SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'];
+const VALID_REPORT_FORMATS = ['json', 'stix'];
+
+// ─── API Key Authentication ──────────────────────────────────────────
+app.addHook('onRequest', async (req, reply) => {
+  // Skip auth for health check
+  if (req.url === '/health') return;
+
+  // No API key configured = auth disabled
+  if (!API_KEY) return;
+
+  // Check X-API-Key header or api_key query param
+  const providedKey = req.headers['x-api-key'] || req.query?.api_key;
+
+  if (!providedKey) {
+    return reply.code(401).send({ error: 'API key required. Set X-API-Key header or api_key query param.' });
+  }
+
+  // Constant-time comparison to prevent timing attacks
+  const expected = Buffer.from(API_KEY, 'utf8');
+  const actual = Buffer.from(providedKey, 'utf8');
+  if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
+    return reply.code(403).send({ error: 'Invalid API key' });
+  }
+});
+
+// ─── Rate Limiting ─────────────────────────────────────────────────
+const rateLimiter = new Map();  // ip -> { count, windowStart }
+
+app.addHook('onRequest', async (req, reply) => {
+  // Skip rate limiting for WebSocket upgrades
+  if (req.url === '/ws') return;
+
+  const ip = req.ip || 'unknown';
+  const now = Date.now();
+
+  if (!rateLimiter.has(ip)) {
+    rateLimiter.set(ip, { count: 1, windowStart: now });
+    return;
+  }
+
+  const entry = rateLimiter.get(ip);
+
+  // Reset window if expired
+  if (now - entry.windowStart > RATE_LIMIT_WINDOW) {
+    entry.count = 1;
+    entry.windowStart = now;
+    return;
+  }
+
+  entry.count++;
+  if (entry.count > RATE_LIMIT_MAX) {
+    return reply.code(429).send({
+      error: 'Rate limit exceeded',
+      retry_after: Math.ceil((RATE_LIMIT_WINDOW - (now - entry.windowStart)) / 1000),
+    });
+  }
+});
+
+// Clean up rate limiter entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of rateLimiter) {
+    if (now - entry.windowStart > RATE_LIMIT_WINDOW * 2) {
+      rateLimiter.delete(ip);
+    }
+  }
+}, 5 * 60_000);
+
+// ─── Input Validation ─────────────────────────────────────────────
+function validateTarget(target) {
+  if (!target || typeof target !== 'string') return 'target is required';
+  if (target.length > 2048) return 'target URL too long (max 2048)';
+  try {
+    const url = new URL(target);
+    if (!['http:', 'https:'].includes(url.protocol)) return 'target must use http:// or https://';
+  } catch {
+    return 'target must be a valid URL';
+  }
+  return null;
+}
+
+function validateModules(modules) {
+  if (!modules) return null;  // defaults to 'all'
+  const list = Array.isArray(modules) ? modules : modules.split(',').map(m => m.trim());
+  const invalid = list.filter(m => !VALID_MODULES.includes(m));
+  if (invalid.length > 0) return `invalid modules: ${invalid.join(', ')}. Valid: ${VALID_MODULES.join(', ')}`;
+  return null;
+}
+
+function validateInt(value, min, max, name) {
+  const n = Number(value);
+  if (!Number.isInteger(n)) return `${name} must be an integer`;
+  if (n < min || n > max) return `${name} must be between ${min} and ${max}`;
+  return null;
+}
+
+// ─── Health Check ───────────────────────────────────────────────────
+app.get('/health', async () => {
+  return { status: 'ok', version: '1.0.0', timestamp: new Date().toISOString() };
+});
+
 // ─── WebSocket — live scan updates ─────────────────────────────────
 const scanSubscribers = new Map(); // scanId -> Set<WebSocket>
 
@@ -146,17 +258,41 @@ function broadcastScanUpdate(scanId, data) {
 
 // POST /scan — Start a new scan
 app.post('/scan', async (req, reply) => {
-  const { target, modules, depth, threads, timeout, delay, proxy, authHeader, cookies, scope, stealth, rateLimit } = req.body || {};
+  const { target, modules, depth, threads, timeout, delay, proxy, authHeader, cookies, scope, stealth, rateLimit, authType, authUrl, authUsername, authPassword } = req.body || {};
 
-  if (!target) return reply.code(400).send({ error: 'target is required' });
+  // ── Input validation ──────────────────────────────────────────
+  const targetError = validateTarget(target);
+  if (targetError) return reply.code(400).send({ error: targetError });
 
+  const modulesError = validateModules(modules);
+  if (modulesError) return reply.code(400).send({ error: modulesError });
+
+  if (depth !== undefined) {
+    const err = validateInt(depth, 1, 10, 'depth');
+    if (err) return reply.code(400).send({ error: err });
+  }
+  if (threads !== undefined) {
+    const err = validateInt(threads, 1, 100, 'threads');
+    if (err) return reply.code(400).send({ error: err });
+  }
+  if (timeout !== undefined) {
+    const err = validateInt(timeout, 1, 120, 'timeout');
+    if (err) return reply.code(400).send({ error: err });
+  }
+  if (rateLimit !== undefined) {
+    const err = validateInt(rateLimit, 1, 1000, 'rateLimit');
+    if (err) return reply.code(400).send({ error: err });
+  }
+
+  // ── Create scan ────────────────────────────────────────────────
   const scanId = uuidv4().slice(0, 8);
   const config = JSON.stringify({ modules: modules || 'all', depth: depth || 3, threads: threads || 20 });
   stmts.createScan.run(scanId, target, config, new Date().toISOString());
 
-  // Spawn Python scanner process
+  // Spawn Python scanner process, passing the scan ID via --scan-id
   const cliPath = path.join(__dirname, '..', 'cli.py');
   const args = ['scan', target, '--auth', '--output', '-',
+    '--scan-id', scanId,
     '--modules', (modules || 'all').toString(),
     '--depth', String(depth || 3),
     '--threads', String(threads || 20),
@@ -165,6 +301,11 @@ app.post('/scan', async (req, reply) => {
   if (proxy) args.push('--proxy', proxy);
   if (stealth) args.push('--stealth');
   if (rateLimit) args.push('--rate-limit', String(rateLimit));
+  if (authHeader) args.push('--auth-header', authHeader);
+  if (authType) args.push('--auth-type', authType);
+  if (authUrl) args.push('--auth-url', authUrl);
+  if (authUsername) args.push('--auth-username', authUsername);
+  if (authPassword) args.push('--auth-password', authPassword);
 
   const proc = spawn('python3', [cliPath, ...args], { detached: true, stdio: 'pipe', cwd: path.join(__dirname, '..') });
 

@@ -54,9 +54,10 @@ def cli():
 @click.option("--stealth", is_flag=True, help="Stealth mode: slower, randomized timing")
 @click.option("--rate-limit", default=100, type=int, help="Max requests per second (default: 100)")
 @click.option("--no-verify-tls", is_flag=True, help="Disable TLS certificate verification (NOT recommended for production)")
+@click.option("--scan-id", default=None, help="Use specific scan ID (for API integration)")
 @click.option("--output", "-o", default=None, help="Output file (JSON format)")
 @click.option("--db", default="webbreaker.db", help="Database file path (default: webbreaker.db)")
-def scan(target, auth, modules, depth, threads, timeout, delay, proxy, auth_header, cookie, auth_type, auth_url, auth_username, auth_password, auth_username_field, auth_password_field, auth_csrf_field, auth_method, auth_success_pattern, auth_failure_pattern, scope, stealth, rate_limit, no_verify_tls, output, db):
+def scan(target, auth, modules, depth, threads, timeout, delay, proxy, auth_header, cookie, auth_type, auth_url, auth_username, auth_password, auth_username_field, auth_password_field, auth_csrf_field, auth_method, auth_success_pattern, auth_failure_pattern, scope, stealth, rate_limit, no_verify_tls, scan_id, output, db):
     """Run a full web application pentest scan against TARGET."""
     print_banner()
 
@@ -119,7 +120,7 @@ def scan(target, auth, modules, depth, threads, timeout, delay, proxy, auth_head
 
     # Run scan
     from core.orchestrator import ScanOrchestrator
-    orchestrator = ScanOrchestrator(config, db_path=db)
+    orchestrator = ScanOrchestrator(config, db_path=db, scan_id=scan_id)
 
     try:
         findings = asyncio.run(orchestrator.run(module_list))
