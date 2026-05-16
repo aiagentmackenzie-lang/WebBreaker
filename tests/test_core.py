@@ -219,6 +219,10 @@ class TestReconTechDetection:
         assert forms[0]["method"] == "POST"
         assert forms[0]["has_csrf_token"] is True
         assert len(forms[0]["fields"]) == 4
+        # New: enctype field
+        assert "enctype" in forms[0]
+        # New: data_attrs field
+        assert "data_attrs" in forms[0]
 
 
 class TestSQLiDetection:
@@ -256,7 +260,8 @@ class TestXSSDetection:
         scanner = XSSScanner(config)
 
         result = scanner._detect_reflection("<script>alert(1)</script>", '<p><script>alert(1)</script></p>')
-        assert result == "reflected"
+        # New FP reduction returns context type, not just 'reflected'
+        assert result in ("html_tag", "html_body", "reflected"), f"Expected context type, got {result}"
 
     def test_html_encoded_reflection(self):
         from core.xss import XSSScanner
@@ -669,6 +674,147 @@ class TestScanResult:
         assert d["total_requests"] == 150
         assert d["scope_blocked_count"] == 5
         assert d["errors"] == ["Connection timeout"]
+
+
+class TestSQLiFPReduction:
+    """Test SQLi FP reduction features."""
+
+    def test_content_similarity_identical(self):
+        from core.sqli import _content_similarity
+        assert _content_similarity("hello world", "hello world") == 1.0
+
+    def test_content_similarity_different(self):
+        from core.sqli import _content_similarity
+        sim = _content_similarity("hello world", "completely different text here")
+        assert sim < 0.5
+
+    def test_content_similarity_empty(self):
+        from core.sqli import _content_similarity
+        assert _content_similarity("", "hello") == 0.0
+        assert _content_similarity("hello", "") == 0.0
+
+    def test_derive_confidence(self):
+        from core.sqli import _derive_confidence
+        # Canary confirmed + baseline delta + 2 confirming = high confidence
+        assert _derive_confidence(True, 0.5, 2) >= 0.8
+        # No canary, no delta, no confirming = base
+        assert _derive_confidence(False, 0.0, 0) < 0.6
+
+    def test_sqli_baseline_fp_check(self):
+        from core.sqli import SQLiScanner
+        config = ScanConfig(target="https://example.com", authorized=True)
+        scanner = SQLiScanner(config)
+        result = scanner._check_error_patterns("Warning: mysqli_fetch_array() expects parameter")
+        assert result is not None
+        assert result[0] == "MySQL"
+
+    def test_canary_tag_generation(self):
+        from core.sqli import _canary_tag
+        tag = _canary_tag(42)
+        assert tag.startswith("wbsqli")
+        assert len(tag) > 6
+
+
+class TestXSSFPReduction:
+    """Test XSS FP reduction features."""
+
+    def test_classify_reflection_context_script_tag(self):
+        from core.xss import _classify_reflection_context
+        context = _classify_reflection_context(
+            '<script>alert(1)</script>',
+            '<p><script>alert(1)</script></p>'
+        )
+        assert context == "html_tag"
+
+    def test_classify_reflection_context_js(self):
+        from core.xss import _classify_reflection_context
+        # Payload inside a <script> block
+        payload = "-alert(1)-"
+        html = "<script>var x = " + payload + ";</script>"
+        context = _classify_reflection_context(payload, html)
+        assert context == "js"
+
+    def test_classify_reflection_context_url(self):
+        from core.xss import _classify_reflection_context
+        context = _classify_reflection_context(
+            "javascript:alert(1)",
+            '<a href="javascript:alert(1)">click</a>'
+        )
+        assert context == "url"
+
+    def test_classify_reflection_context_attribute(self):
+        from core.xss import _classify_reflection_context
+        context = _classify_reflection_context(
+            '" onmouseover="alert(1)',
+            '<input value="" onmouseover="alert(1)">'
+        )
+        assert context == "attribute"
+
+    def test_classify_reflection_context_not_found(self):
+        from core.xss import _classify_reflection_context
+        context = _classify_reflection_context(
+            '<script>alert(1)</script>',
+            'Hello World, no reflection here'
+        )
+        assert context is None
+
+    def test_derive_xss_confidence(self):
+        from core.xss import _derive_xss_confidence
+        assert _derive_xss_confidence("html_tag", True) >= 0.85
+        assert _derive_xss_confidence("html_body", False) < 0.7
+
+
+class TestCMDIBaseline:
+    """Test CMDi baseline FP reduction."""
+
+    def test_cmdi_baseline_caching(self):
+        from core.cmdi import CmdiScanner
+        config = ScanConfig(target="https://example.com", authorized=True)
+        scanner = CmdiScanner(config)
+        assert hasattr(scanner, '_baseline_cache')
+        assert isinstance(scanner._baseline_cache, dict)
+
+
+class TestFormDetection:
+    """Test form detection improvements."""
+
+    def test_form_without_action(self):
+        from core.recon import ReconScanner
+        config = ScanConfig(target="https://example.com", authorized=True)
+        scanner = ReconScanner(config)
+        html = '<form method="POST"><input type="text" name="q"></form>'
+        forms = scanner._extract_forms(html, "https://example.com/search")
+        assert len(forms) == 1
+        assert forms[0]["action"] == "https://example.com/search"
+
+    def test_form_enctype(self):
+        from core.recon import ReconScanner
+        config = ScanConfig(target="https://example.com", authorized=True)
+        scanner = ReconScanner(config)
+        html = '<form action="/upload" method="POST" enctype="multipart/form-data"><input type="file" name="file"></form>'
+        forms = scanner._extract_forms(html, "https://example.com")
+        assert len(forms) == 1
+        assert forms[0]["enctype"] == "multipart/form-data"
+
+    def test_form_data_attrs(self):
+        from core.recon import ReconScanner
+        config = ScanConfig(target="https://example.com", authorized=True)
+        scanner = ReconScanner(config)
+        html = '<form action="/api" method="POST" data-remote="true"><input type="text" name="q"></form>'
+        forms = scanner._extract_forms(html, "https://example.com")
+        assert len(forms) == 1
+        assert "data-remote" in forms[0]["data_attrs"]
+        assert forms[0]["data_attrs"]["data-remote"] == "true"
+
+    def test_form_button_element(self):
+        from core.recon import ReconScanner
+        config = ScanConfig(target="https://example.com", authorized=True)
+        scanner = ReconScanner(config)
+        html = '<form action="/submit" method="POST"><input type="text" name="name"><button type="submit" name="action" value="save">Save</button></form>'
+        forms = scanner._extract_forms(html, "https://example.com")
+        assert len(forms) == 1
+        button_fields = [f for f in forms[0]["fields"] if f["type"] == "submit"]
+        assert len(button_fields) >= 1
 
 
 if __name__ == "__main__":

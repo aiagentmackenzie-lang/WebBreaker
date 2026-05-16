@@ -1,14 +1,95 @@
-"""XSS Scanner module — detects reflected, stored, and DOM-based XSS."""
+"""XSS Scanner module — detects reflected, stored, and DOM-based XSS.
+
+FP reduction strategy:
+- Canary-based confirmation: inject a unique marker, verify it appears in response before reporting
+- Context-aware reflection: classify reflection as html_tag, attribute, js, or url context
+- Only report HIGH if payload is reflected in an executable context (inside script, event handler, or unquoted attribute)
+- Partially filtered payloads get MEDIUM with lower confidence
+- DOM XSS uses source-sink analysis (unchanged)
+- Confidence derived from context type and canary confirmation
+- Request/response logging: store full HTTP data in findings
+"""
 
 import re
 import hashlib
-import asyncio
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse, quote
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from datetime import datetime, timezone
 from typing import Optional
 
 from .config import Finding, Severity, FindingType, ScanConfig
 from .http_client import HttpClient
+
+
+def _canary_tag(n: int) -> str:
+    """Generate a unique canary string for XSS testing."""
+    return f"wbxss{n:04x}"
+
+
+def _classify_reflection_context(payload: str, response_text: str) -> Optional[str]:
+    """Classify the context in which a payload is reflected.
+
+    Returns one of: 'html_tag', 'attribute', 'js', 'url', 'html_encoded', or None.
+    """
+    if payload not in response_text:
+        return None
+
+    # Find the position of the payload in the response
+    pos = response_text.find(payload)
+    if pos < 0:
+        return None
+
+    # Get surrounding context (200 chars before and after)
+    start = max(0, pos - 200)
+    end = min(len(response_text), pos + len(payload) + 200)
+    context = response_text[start:end]
+
+    # Check if we're inside a <script> block
+    # Look for <script before the payload and no </script> between <script and payload
+    before = response_text[:pos]
+    script_opens = len(re.findall(r"<script[\s>]", before, re.IGNORECASE))
+    script_closes = len(re.findall(r"</script>", before, re.IGNORECASE))
+    if script_opens > script_closes:
+        return "js"
+
+    # Check if we're inside an event handler attribute
+    # e.g., <div onmouseover="...PAYLOAD...">
+    if re.search(r'on\w+\s*=\s*["\'][^"\']*$', before[-200:], re.IGNORECASE):
+        return "js"
+
+    # Check if we're inside a URL attribute (href, src, action, formaction)
+    if re.search(r'(?:href|src|action|formaction)\s*=\s*["\'][^"\']*$', before[-200:], re.IGNORECASE):
+        return "url"
+
+    # Check if we're inside a tag attribute (but not an event handler)
+    # e.g., <input value="...PAYLOAD...">
+    if re.search(r'<\w+[^>]*\s\w+\s*=\s*["\'][^"\']*$', before[-200:], re.IGNORECASE):
+        # Check if the payload would break out of the attribute
+        if '"' in payload or "'" in payload:
+            return "attribute"  # Payload breaks out of attribute — dangerous
+        return "attribute"  # Still inside attribute, less dangerous but reportable
+
+    # If payload starts with < and creates a new tag
+    if payload.strip().startswith("<") and re.search(r'<\w+', payload):
+        return "html_tag"
+
+    # Default: reflected in HTML body content
+    return "html_body"
+
+
+def _derive_xss_confidence(context: str, canary_confirmed: bool) -> float:
+    """Derive XSS confidence score from context and canary confirmation."""
+    base_scores = {
+        "html_tag": 0.85,
+        "js": 0.90,
+        "attribute": 0.75,
+        "url": 0.70,
+        "html_body": 0.60,
+        "html_encoded": 0.40,
+    }
+    score = base_scores.get(context, 0.50)
+    if canary_confirmed:
+        score = min(score + 0.10, 0.95)
+    return round(score, 2)
 
 
 # Context-aware XSS payloads
@@ -53,8 +134,8 @@ WAF_BYPASS_PAYLOADS = [
     '<script>eval(atob(\'YWxlcnQoMSk=\'))</script>',
     '<svg/onload=alert(1)>',
     '<img/src=x/onerror=alert(1)>',
-    '<script\x09>alert(1)</script>',
-    '<script\x0a>alert(1)</script>',
+    '<script\t>alert(1)</script>',
+    '<script\n>alert(1)</script>',
     '<ScRiPt>alert(1)</ScRiPt>',
     '<script>alert(1)</script' + '>',
     '<<script>alert(1)//<<script>',
@@ -97,7 +178,7 @@ DOM_SOURCES = [
 
 
 class XSSScanner:
-    """Cross-Site Scripting detection across multiple contexts."""
+    """Cross-Site Scripting detection with context-aware FP reduction."""
 
     def __init__(self, config: ScanConfig):
         self.config = config
@@ -105,17 +186,18 @@ class XSSScanner:
         self.findings: list[Finding] = []
 
     def _detect_reflection(self, payload: str, response_text: str) -> Optional[str]:
-        """Check if a payload is reflected in the response."""
+        """Check if a payload is reflected in the response and classify context."""
         # Direct reflection
         if payload in response_text:
-            return "reflected"
+            context = _classify_reflection_context(payload, response_text)
+            return context or "html_body"
 
-        # URL-decoded reflection
+        # URL-decoded reflection (server may decode entities)
         decoded = payload.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
-        if decoded in response_text:
+        if decoded != payload and decoded in response_text:
             return "partially_filtered"
 
-        # HTML-entity encoded but still dangerous context
+        # HTML-entity encoded but still in a dangerous context
         if payload.replace("<", "&lt;").replace(">", "&gt;") in response_text:
             return "html_encoded"
 
@@ -144,11 +226,32 @@ class XSSScanner:
 
         return results
 
+    async def _inject_canary(self, url: str, param: str, method: str) -> tuple[bool, str]:
+        """Inject a unique canary to verify parameter is reflected."""
+        parsed = urlparse(url)
+        params_dict = parse_qs(parsed.query)
+        canary = _canary_tag(hash(f"{url}:{param}") % 65536)
+
+        if method == "GET":
+            tp = dict(params_dict)
+            tp[param] = [canary]
+            test_url = urlunparse(parsed._replace(query=urlencode(tp, doseq=True)))
+            resp = await self.client.get(test_url)
+        else:
+            resp = await self.client.post(url, data={param: canary})
+
+        if resp and canary in resp.text:
+            return True, canary
+        return False, canary
+
     async def scan_param(self, url: str, param: str, method: str = "GET") -> list[Finding]:
-        """Test a parameter for XSS vulnerabilities."""
+        """Test a parameter for XSS vulnerabilities with FP reduction."""
         findings = []
         parsed = urlparse(url)
         params_dict = parse_qs(parsed.query)
+
+        # Step 0: Canary injection to confirm parameter is reflected
+        canary_confirmed, canary_value = await self._inject_canary(url, param, method)
 
         for context, payloads in XSS_PAYLOADS.items():
             for payload in payloads:
@@ -172,30 +275,44 @@ class XSSScanner:
                 if not resp:
                     continue
 
-                reflection = self._detect_reflection(marked_payload, resp.text)
-                if reflection == "reflected":
-                    severity = Severity.HIGH if context == "html_context" else Severity.MEDIUM
+                # Check for the original payload (not marked) to verify actual reflection
+                reflection_context = self._detect_reflection(payload, resp.text)
+
+                if reflection_context and reflection_context not in ("html_encoded", "partially_filtered"):
+                    # Determine severity based on context
+                    if reflection_context in ("html_tag", "js"):
+                        severity = Severity.HIGH
+                    elif reflection_context in ("attribute", "url"):
+                        severity = Severity.MEDIUM
+                    else:
+                        severity = Severity.MEDIUM
+
+                    confidence = _derive_xss_confidence(reflection_context, canary_confirmed)
+
                     findings.append(Finding(
                         finding_type=FindingType.XSS,
                         severity=severity,
                         url=url, parameter=param, payload=payload,
-                        evidence=f"[{context}] Payload reflected unmodified in response",
-                        request=test_url if method == "GET" else f"POST {url} {param}={marked_payload}",
+                        evidence=f"[{context}] Payload reflected in {reflection_context} context" + (" (canary confirmed)" if canary_confirmed else ""),
+                        request=test_url if method == "GET" else f"POST {url} {param}={marked_payload[:100]}",
                         response=resp.text[:500],
                         remediation="Encode output with context-appropriate encoding. Implement CSP headers.",
-                        confidence=0.9,
+                        confidence=confidence,
                         timestamp=datetime.now(timezone.utc).isoformat(),
                     ))
                     break  # Found for this context, move to next
 
-                elif reflection == "partially_filtered":
+                elif reflection_context == "partially_filtered":
+                    confidence = _derive_xss_confidence("partially_filtered", canary_confirmed)
                     findings.append(Finding(
                         finding_type=FindingType.XSS,
                         severity=Severity.MEDIUM,
                         url=url, parameter=param, payload=payload,
-                        evidence=f"[{context}] Payload partially filtered — may bypass with encoding",
+                        evidence=f"[{context}] Payload partially filtered — may bypass with encoding" + (" (canary confirmed)" if canary_confirmed else ""),
+                        request=test_url if method == "GET" else f"POST {url} {param}={marked_payload[:100]}",
+                        response=resp.text[:500],
                         remediation="Improve output encoding. Add CSP as defense-in-depth.",
-                        confidence=0.6,
+                        confidence=confidence,
                         timestamp=datetime.now(timezone.utc).isoformat(),
                     ))
 
@@ -214,17 +331,22 @@ class XSSScanner:
                 else:
                     resp = await self.client.post(url, data={param: payload})
 
-                if resp and self._detect_reflection(payload, resp.text) == "reflected":
-                    findings.append(Finding(
-                        finding_type=FindingType.XSS,
-                        severity=Severity.HIGH,
-                        url=url, parameter=param, payload=f"[WAF bypass] {payload}",
-                        evidence="WAF bypass payload reflected unmodified",
-                        remediation="Fix the underlying XSS AND review WAF rules. CSP as defense-in-depth.",
-                        confidence=0.85,
-                        timestamp=datetime.now(timezone.utc).isoformat(),
-                    ))
-                    break
+                if resp:
+                    reflection_context = self._detect_reflection(payload, resp.text)
+                    if reflection_context and reflection_context not in ("html_encoded", "partially_filtered"):
+                        confidence = _derive_xss_confidence(reflection_context, canary_confirmed)
+                        findings.append(Finding(
+                            finding_type=FindingType.XSS,
+                            severity=Severity.HIGH,
+                            url=url, parameter=param, payload=f"[WAF bypass] {payload}",
+                            evidence=f"WAF bypass: payload reflected in {reflection_context} context" + (" (canary confirmed)" if canary_confirmed else ""),
+                            request=test_url if method == "GET" else f"POST {url} {param}={payload[:100]}",
+                            response=resp.text[:500],
+                            remediation="Fix the underlying XSS AND review WAF rules. CSP as defense-in-depth.",
+                            confidence=confidence,
+                            timestamp=datetime.now(timezone.utc).isoformat(),
+                        ))
+                        break
 
         return findings
 

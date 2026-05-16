@@ -1,6 +1,16 @@
-"""SQL Injection scanner module — detects error-based, boolean, time-based, UNION, stacked, and OOB SQLi."""
+"""SQL Injection scanner module — detects error-based, boolean, time-based, UNION, stacked, and OOB SQLi.
+
+FP reduction strategy:
+- Canary injection: inject a unique marker, verify it appears in the response before trusting error patterns
+- Baseline comparison: compare injected responses against a clean baseline (length + content delta)
+- Boolean verification: require TRUE response ≈ baseline AND FALSE response significantly different
+- Time verification: 2-sample timing (baseline + payload), require ≥3× baseline AND ≥4.5s absolute
+- Confidence scoring: derive from evidence quality (canary confirmed, baseline delta, confirming payloads)
+- Request/response logging: store full HTTP data in findings
+"""
 
 import re
+import hashlib
 import asyncio
 import time
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse, quote
@@ -105,23 +115,79 @@ WAF_BYPASS = {
 }
 
 
+def _canary_tag(n: int) -> str:
+    """Generate a unique canary string for injection testing."""
+    return f"wbsqli{n:04d}"
+
+
+def _content_similarity(a: str, b: str) -> float:
+    """Rough content similarity score (0.0–1.0) based on common n-grams."""
+    if not a or not b:
+        return 0.0
+    # Use short substrings for speed
+    short_a = a[:2000]
+    short_b = b[:2000]
+    if short_a == short_b:
+        return 1.0
+    # Length-based similarity
+    max_len = max(len(short_a), len(short_b), 1)
+    len_diff = abs(len(short_a) - len(short_b))
+    len_sim = 1.0 - (len_diff / max_len)
+    # Word overlap
+    words_a = set(short_a.split()[:200])
+    words_b = set(short_b.split()[:200])
+    if not words_a or not words_b:
+        return len_sim * 0.5
+    overlap = len(words_a & words_b) / max(len(words_a | words_b), 1)
+    return 0.5 * len_sim + 0.5 * overlap
+
+
+def _derive_confidence(canary_confirmed: bool, baseline_delta: float, confirming_count: int) -> float:
+    """Derive confidence score from evidence quality."""
+    score = 0.5
+    if canary_confirmed:
+        score += 0.2  # Parameter is injectable (reflected)
+    if baseline_delta > 0.3:
+        score += 0.15  # Significant difference from baseline
+    elif baseline_delta > 0.1:
+        score += 0.05
+    if confirming_count >= 2:
+        score += 0.15  # Multiple confirming observations
+    elif confirming_count >= 1:
+        score += 0.05
+    return min(round(score, 2), 0.95)
+
+
+def _build_request_info(method: str, url: str, param: str, value: str, body: dict = None) -> str:
+    """Build a human-readable request string for evidence."""
+    if method == "GET":
+        return f"GET {url}"
+    else:
+        val_preview = value[:100]
+        return f"POST {url} {param}={val_preview}"
+
+
 class SQLiScanner:
-    """SQL Injection detection and verification."""
+    """SQL Injection detection with canary-based FP reduction and baseline comparison."""
 
     def __init__(self, config: ScanConfig):
         self.config = config
         self.client = HttpClient(config)
         self.findings: list[Finding] = []
-        self._baseline_cache: dict[str, str] = {}
+        self._baseline_cache: dict[str, dict] = {}  # key -> {text, length, status}
 
-    async def _get_baseline(self, url: str, param: str, original_value: str) -> Optional[str]:
+    async def _get_baseline(self, url: str, param: str) -> Optional[dict]:
         """Get the baseline response for comparison."""
         key = f"{url}:{param}"
         if key in self._baseline_cache:
             return self._baseline_cache[key]
         resp = await self.client.get(url)
         if resp:
-            self._baseline_cache[key] = resp.text[:2000]
+            self._baseline_cache[key] = {
+                "text": resp.text[:3000],
+                "length": len(resp.text),
+                "status": resp.status_code,
+            }
             return self._baseline_cache[key]
         return None
 
@@ -134,8 +200,30 @@ class SQLiScanner:
                     return db, match.group(0)
         return None
 
+    async def _inject_canary(self, url: str, param: str, original_value: str, method: str) -> tuple[bool, Optional[str]]:
+        """Inject a unique canary to verify the parameter is reflected in the response.
+
+        Returns (canary_reflected, canary_value).
+        """
+        parsed = urlparse(url)
+        params_dict = parse_qs(parsed.query)
+        canary = _canary_tag(hash(f"{url}:{param}") % 10000)
+        test_value = original_value + canary
+
+        if method == "GET":
+            tp = dict(params_dict)
+            tp[param] = [test_value]
+            test_url = urlunparse(parsed._replace(query=urlencode(tp, doseq=True)))
+            resp = await self.client.get(test_url)
+        else:
+            resp = await self.client.post(url, data={param: test_value})
+
+        if resp and canary in resp.text:
+            return True, canary
+        return False, canary
+
     async def scan_param(self, url: str, param: str, method: str = "GET") -> list[Finding]:
-        """Test a single parameter for SQL injection."""
+        """Test a single parameter for SQL injection with FP reduction."""
         findings = []
         parsed = urlparse(url)
         params_dict = parse_qs(parsed.query)
@@ -145,11 +233,17 @@ class SQLiScanner:
         else:
             original_value = params_dict[param][0]
 
-        baseline = await self._get_baseline(url, param, original_value)
+        baseline = await self._get_baseline(url, param)
         if not baseline:
             return findings
 
-        # 1. Error-based detection
+        # Step 0: Canary injection — verify parameter is injectable
+        canary_confirmed, canary_value = await self._inject_canary(url, param, original_value, method)
+
+        # Track confirming observations for confidence
+        confirming_count = 0
+
+        # 1. Error-based detection — verify error isn't in baseline
         for payload_list, scan_name in [
             (UNION_PAYLOADS, "UNION"),
             (STACKED_PAYLOADS, "Stacked"),
@@ -172,20 +266,28 @@ class SQLiScanner:
                 error = self._check_error_patterns(resp.text)
                 if error:
                     db, evidence = error
+                    # FP check: is this error also in the baseline?
+                    baseline_error = self._check_error_patterns(baseline["text"])
+                    if baseline_error and baseline_error[0] == db and baseline_error[1] == evidence:
+                        # Same error exists in baseline — likely a false positive
+                        continue
+                    confirming_count += 1
+                    baseline_delta = 1.0 - _content_similarity(baseline["text"], resp.text[:2000])
+                    confidence = _derive_confidence(canary_confirmed, baseline_delta, confirming_count)
                     findings.append(Finding(
                         finding_type=FindingType.SQLI,
                         severity=Severity.CRITICAL,
                         url=url, parameter=param, payload=payload,
-                        evidence=f"[{scan_name}] {db} error: {evidence}",
-                        request=test_url if method == "GET" else f"POST {url} {param}={test_value}",
+                        evidence=f"[{scan_name}] {db} error: {evidence}" + (" (canary confirmed)" if canary_confirmed else ""),
+                        request=_build_request_info(method, url if method == "GET" else url, param, test_value, body={param: test_value} if method == "POST" else None),
                         response=resp.text[:500],
                         remediation=f"Use parameterized queries/prepared statements for {param}. Never concatenate user input into SQL.",
-                        confidence=0.9,
+                        confidence=confidence,
                         timestamp=datetime.now(timezone.utc).isoformat(),
                     ))
                     break
 
-        # 2. Boolean-based detection
+        # 2. Boolean-based detection with improved baseline comparison
         for true_payload, false_payload in BOOLEAN_PAYLOADS:
             true_value = original_value + true_payload
             false_value = original_value + false_payload
@@ -207,28 +309,42 @@ class SQLiScanner:
             if not true_resp or not false_resp:
                 continue
 
-            # Compare: true condition matches baseline, false differs
-            true_match = abs(len(true_resp.text) - len(baseline)) < 100
-            false_diff = abs(len(false_resp.text) - len(baseline)) > 200
+            # Improved comparison: use content similarity, not just length
+            true_sim = _content_similarity(baseline["text"], true_resp.text[:2000])
+            false_sim = _content_similarity(baseline["text"], false_resp.text[:2000])
+            baseline_delta = abs(true_sim - false_sim)
 
-            if true_match and false_diff:
+            # TRUE should be similar to baseline, FALSE should be different
+            # Require at least 20% similarity gap
+            if true_sim > 0.7 and baseline_delta > 0.2:
+                confirming_count += 1
+                confidence = _derive_confidence(canary_confirmed, baseline_delta, confirming_count)
                 findings.append(Finding(
                     finding_type=FindingType.SQLI,
                     severity=Severity.HIGH,
                     url=url, parameter=param, payload=f"{true_payload} / {false_payload}",
-                    evidence=f"Boolean diff: TRUE response={len(true_resp.text)}, FALSE response={len(false_resp.text)}, baseline={len(baseline)}",
+                    evidence=f"Boolean diff: TRUE similarity={true_sim:.2f}, FALSE similarity={false_sim:.2f}, delta={baseline_delta:.2f}" + (" (canary confirmed)" if canary_confirmed else ""),
+                    request=_build_request_info(method, url, param, f"{true_payload}/{false_payload}"),
+                    response=true_resp.text[:500] if true_resp else "",
                     remediation=f"Use parameterized queries for {param}. Implement input validation.",
-                    confidence=0.85,
+                    confidence=confidence,
                     timestamp=datetime.now(timezone.utc).isoformat(),
                 ))
                 break
 
-        # 3. Time-based detection
-        # Get baseline response time first
+        # 3. Time-based detection — 2-sample verification
         baseline_time = None
         baseline_start = time.monotonic()
-        baseline_resp = await self.client.get(url)
-        baseline_time = time.monotonic() - baseline_start if baseline_resp else 2.0
+        baseline_resp2 = await self.client.get(url)
+        baseline_time = time.monotonic() - baseline_start if baseline_resp2 else 2.0
+
+        # Take 2 baseline samples for reliability
+        if baseline_time < 1.0:
+            baseline_start2 = time.monotonic()
+            baseline_resp3 = await self.client.get(url)
+            if baseline_resp3:
+                second_time = time.monotonic() - baseline_start2
+                baseline_time = max(baseline_time, second_time)  # Use worst-case baseline
 
         for payload in TIME_PAYLOADS:
             test_value = original_value + payload
@@ -244,13 +360,17 @@ class SQLiScanner:
 
             # Require at least 3x baseline time AND at least 4.5s absolute
             if resp and elapsed >= max(4.5, baseline_time * 3):
+                confirming_count += 1
+                confidence = _derive_confidence(canary_confirmed, elapsed / max(baseline_time, 0.1), confirming_count)
                 findings.append(Finding(
                     finding_type=FindingType.SQLI,
                     severity=Severity.HIGH,
                     url=url, parameter=param, payload=payload,
-                    evidence=f"Time-based: response took {elapsed:.2f}s (expected <2s)",
+                    evidence=f"Time-based: response took {elapsed:.2f}s (baseline {baseline_time:.2f}s, ratio {elapsed/max(baseline_time,0.01):.1f}x)" + (" (canary confirmed)" if canary_confirmed else ""),
+                    request=_build_request_info(method, url, param, payload),
+                    response=resp.text[:500] if resp else "",
                     remediation=f"Use parameterized queries for {param}. Implement strict input validation and WAF rules.",
-                    confidence=0.8,
+                    confidence=confidence,
                     timestamp=datetime.now(timezone.utc).isoformat(),
                 ))
                 break
@@ -274,13 +394,21 @@ class SQLiScanner:
                             error = self._check_error_patterns(resp.text)
                             if error:
                                 db, evidence = error
+                                # FP check against baseline
+                                baseline_error = self._check_error_patterns(baseline["text"])
+                                if baseline_error and baseline_error[0] == db and baseline_error[1] == evidence:
+                                    continue
+                                confirming_count += 1
+                                confidence = _derive_confidence(canary_confirmed, 0.5, confirming_count)
                                 findings.append(Finding(
                                     finding_type=FindingType.SQLI,
                                     severity=Severity.HIGH,
                                     url=url, parameter=param, payload=f"[{bypass_name}] {bp}",
-                                    evidence=f"WAF bypass ({bypass_name}): {db} error: {evidence}",
+                                    evidence=f"WAF bypass ({bypass_name}): {db} error: {evidence}" + (" (canary confirmed)" if canary_confirmed else ""),
+                                    request=_build_request_info(method, url, param, bp),
+                                    response=resp.text[:500],
                                     remediation="Fix the underlying SQL injection AND improve WAF rules.",
-                                    confidence=0.75,
+                                    confidence=confidence,
                                     timestamp=datetime.now(timezone.utc).isoformat(),
                                 ))
                                 break

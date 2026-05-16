@@ -73,21 +73,42 @@ class ReconScanner:
         return detected
 
     def _extract_forms(self, html: str, base_url: str) -> list[dict]:
-        """Extract forms with their fields and actions."""
+        """Extract forms with their fields and actions.
+        Handles: forms without action (defaults to current URL), multipart forms,
+        button elements, and data- attributes."""
         soup = BeautifulSoup(html, "lxml")
         forms = []
         for form in soup.find_all("form"):
             fields = []
-            for inp in form.find_all(["input", "textarea", "select"]):
-                field = {
+            # Process input, textarea, select, and button elements
+            for inp in form.find_all(["input", "textarea", "select", "button"]):
+                tag_name = inp.name.lower()
+                field_type = inp.get("type", "text" if tag_name != "button" else "submit")
+                # Skip submit/button types in field enumeration for injection (keep for structure)
+                fields.append({
                     "name": inp.get("name", ""),
-                    "type": inp.get("type", "text"),
+                    "type": field_type if tag_name != "button" else "submit",
                     "value": inp.get("value", ""),
-                }
-                fields.append(field)
+                })
+
+            # Resolve action: empty/missing action defaults to current URL
+            raw_action = form.get("action", "")
+            if raw_action and raw_action.strip():
+                resolved_action = urljoin(base_url, raw_action)
+            else:
+                # Form with no action submits to the current page
+                resolved_action = base_url
+
+            # Detect enctype (multipart/form-data, etc.)
+            enctype = form.get("enctype", "application/x-www-form-urlencoded")
+
+            # Detect data- attributes
+            data_attrs = {k: v for k, v in form.attrs.items() if k.startswith("data-")}
+
             forms.append({
-                "action": urljoin(base_url, form.get("action", "")),
+                "action": resolved_action,
                 "method": form.get("method", "GET").upper(),
+                "enctype": enctype,
                 "fields": fields,
                 "has_csrf_token": any(
                     f["name"].lower() in ("csrfmiddlewaretoken", "csrf_token",
@@ -96,6 +117,7 @@ class ReconScanner:
                                            "anti_forgery_token")
                     for f in fields
                 ),
+                "data_attrs": data_attrs,
             })
         return forms
 

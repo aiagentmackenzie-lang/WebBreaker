@@ -1,4 +1,13 @@
-"""Command Injection scanner — OS command injection detection (Linux + Windows)."""
+"""Command Injection scanner — OS command injection detection (Linux + Windows).
+
+FP reduction strategy:
+- Time-based: 2-sample baseline, require ≥3× baseline AND ≥4.5s absolute
+- Output-based: verify marker is in response AND not in baseline
+- Error-based: verify error pattern not in baseline response
+- Filter bypass: same baseline check
+- Confidence scoring based on evidence quality
+- Request/response logging: store full HTTP data in findings
+"""
 
 import re
 import asyncio
@@ -81,12 +90,23 @@ MARKER = "CMDI_WEBBREAKER_7341"
 
 
 class CmdiScanner:
-    """OS Command Injection detection."""
+    """OS Command Injection detection with baseline FP reduction."""
 
     def __init__(self, config: ScanConfig):
         self.config = config
         self.client = HttpClient(config)
         self.findings: list[Finding] = []
+        self._baseline_cache: dict[str, str] = {}  # url -> baseline text
+
+    async def _get_baseline(self, url: str) -> Optional[str]:
+        """Get baseline response for FP comparison."""
+        if url in self._baseline_cache:
+            return self._baseline_cache[url]
+        resp = await self.client.get(url)
+        if resp:
+            self._baseline_cache[url] = resp.text[:2000]
+            return self._baseline_cache[url]
+        return None
 
     def _check_error_patterns(self, text: str) -> Optional[tuple[str, str]]:
         for pattern, desc in CMDI_ERROR_PATTERNS:
@@ -112,16 +132,28 @@ class CmdiScanner:
         return None
 
     async def scan_param(self, url: str, param: str, method: str = "GET") -> list[Finding]:
-        """Test a parameter for command injection."""
+        """Test a parameter for command injection with baseline FP reduction."""
         findings = []
         parsed = urlparse(url)
         params_dict = parse_qs(parsed.query)
         original_value = params_dict.get(param, [""])[0]
 
-        # 1. Time-based detection — get baseline first
+        # Get baseline for FP comparison
+        baseline = await self._get_baseline(url)
+
+        # 1. Time-based detection — 2-sample baseline
+        baseline_time = None
         baseline_start = time.monotonic()
         baseline_resp = await self.client.get(url)
         baseline_time = time.monotonic() - baseline_start if baseline_resp else 2.0
+
+        # Take second baseline sample for reliability
+        if baseline_time < 1.0:
+            baseline_start2 = time.monotonic()
+            baseline_resp2 = await self.client.get(url)
+            if baseline_resp2:
+                second_time = time.monotonic() - baseline_start2
+                baseline_time = max(baseline_time, second_time)
 
         for payload in TIME_PAYLOADS_LINUX:
             test_value = original_value + payload
@@ -138,18 +170,21 @@ class CmdiScanner:
                 elapsed = time.monotonic() - start
 
             if resp and elapsed >= max(4.5, baseline_time * 3):
+                confidence = 0.85 if baseline_time < 1.0 else 0.80
                 findings.append(Finding(
                     finding_type=FindingType.CMDI,
                     severity=Severity.CRITICAL,
                     url=url, parameter=param, payload=payload,
-                    evidence=f"Time-based: response took {elapsed:.2f}s (expected <2s)",
+                    evidence=f"Time-based: response took {elapsed:.2f}s (baseline {baseline_time:.2f}s, ratio {elapsed/max(baseline_time,0.01):.1f}x)",
+                    request=f"GET {url}" if method == "GET" else f"POST {url} [{param}={test_value[:100]}]",
+                    response=resp.text[:500] if resp else "",
                     remediation="Never pass user input to OS commands. Use language-native APIs instead.",
-                    confidence=0.85,
+                    confidence=confidence,
                     timestamp=datetime.now(timezone.utc).isoformat(),
                 ))
                 break
 
-        # 2. Output-based detection
+        # 2. Output-based detection — verify marker not in baseline
         if not findings:
             for payload in OUTPUT_PAYLOADS:
                 test_value = original_value + payload
@@ -164,12 +199,17 @@ class CmdiScanner:
                 if not resp:
                     continue
 
+                # FP check: marker should NOT be in baseline
                 if self._check_output_marker(resp.text):
+                    if baseline and MARKER in baseline:
+                        continue  # Marker in baseline — false positive
                     findings.append(Finding(
                         finding_type=FindingType.CMDI,
                         severity=Severity.CRITICAL,
                         url=url, parameter=param, payload=payload,
-                        evidence=f"Output marker '{MARKER}' found in response",
+                        evidence=f"Output marker '{MARKER}' found in response" + (" (baseline checked)" if baseline else ""),
+                        request=f"GET {url}" if method == "GET" else f"POST {url} [{param}={test_value[:100]}]",
+                        response=resp.text[:500],
                         remediation="Never pass user input to OS commands. Use allowlisted commands only.",
                         confidence=0.95,
                         timestamp=datetime.now(timezone.utc).isoformat(),
@@ -178,18 +218,24 @@ class CmdiScanner:
 
                 cmd_output = self._check_command_output(resp.text)
                 if cmd_output:
+                    if baseline:
+                        # Check if the same pattern exists in baseline
+                        if self._check_command_output(baseline):
+                            continue  # Pattern in baseline — likely FP
                     findings.append(Finding(
                         finding_type=FindingType.CMDI,
                         severity=Severity.CRITICAL,
                         url=url, parameter=param, payload=payload,
-                        evidence=f"Command output detected: {cmd_output}",
+                        evidence=f"Command output detected: {cmd_output}" + (" (baseline checked)" if baseline else ""),
+                        request=f"GET {url}" if method == "GET" else f"POST {url} [{param}={test_value[:100]}]",
+                        response=resp.text[:500],
                         remediation="Never pass user input to OS commands. Use language-native APIs.",
-                        confidence=0.9,
+                        confidence=0.90,
                         timestamp=datetime.now(timezone.utc).isoformat(),
                     ))
                     break
 
-        # 3. Error-based detection
+        # 3. Error-based detection — verify error not in baseline
         if not findings:
             for payload in OUTPUT_PAYLOADS[:5]:
                 test_value = original_value + payload
@@ -206,18 +252,25 @@ class CmdiScanner:
 
                 error = self._check_error_patterns(resp.text)
                 if error:
+                    # FP check: error pattern in baseline?
+                    if baseline:
+                        baseline_error = self._check_error_patterns(baseline)
+                        if baseline_error and baseline_error[1] == error[1]:
+                            continue  # Same error in baseline — likely FP
                     findings.append(Finding(
                         finding_type=FindingType.CMDI,
                         severity=Severity.HIGH,
                         url=url, parameter=param, payload=payload,
-                        evidence=f"Error-based: {error[0]} — {error[1]}",
+                        evidence=f"Error-based: {error[0]} — {error[1]}" + (" (baseline checked)" if baseline else ""),
+                        request=f"GET {url}" if method == "GET" else f"POST {url} [{param}={test_value[:100]}]",
+                        response=resp.text[:500],
                         remediation="Never pass user input to OS commands. Validate and sanitize all input.",
-                        confidence=0.8,
+                        confidence=0.80,
                         timestamp=datetime.now(timezone.utc).isoformat(),
                     ))
                     break
 
-        # 4. Filter bypass attempts
+        # 4. Filter bypass attempts — baseline check
         if not findings:
             for payload in BYPASS_PAYLOADS[:4]:
                 test_value = original_value + payload
@@ -229,18 +282,31 @@ class CmdiScanner:
                 else:
                     resp = await self.client.post(url, data={param: test_value})
 
-                if resp and (self._check_output_marker(resp.text) or self._check_error_patterns(resp.text)):
-                    evidence = "Marker found" if self._check_output_marker(resp.text) else f"Error: {self._check_error_patterns(resp.text)[1]}"
-                    findings.append(Finding(
-                        finding_type=FindingType.CMDI,
-                        severity=Severity.HIGH,
-                        url=url, parameter=param, payload=f"[bypass] {payload}",
-                        evidence=f"Filter bypass: {evidence}",
-                        remediation="Fix underlying injection AND improve input filtering. Use allowlists.",
-                        confidence=0.75,
-                        timestamp=datetime.now(timezone.utc).isoformat(),
-                    ))
-                    break
+                if resp:
+                    marker_found = self._check_output_marker(resp.text)
+                    error = self._check_error_patterns(resp.text)
+                    # FP checks
+                    if marker_found and baseline and MARKER in baseline:
+                        continue
+                    if error and baseline:
+                        baseline_error = self._check_error_patterns(baseline)
+                        if baseline_error and baseline_error[1] == error[1]:
+                            continue
+
+                    if marker_found or error:
+                        evidence = f"Marker found" if marker_found else f"Error: {error[1]}"
+                        findings.append(Finding(
+                            finding_type=FindingType.CMDI,
+                            severity=Severity.HIGH,
+                            url=url, parameter=param, payload=f"[bypass] {payload}",
+                            evidence=f"Filter bypass: {evidence}" + (" (baseline checked)" if baseline else ""),
+                            request=f"GET {url}" if method == "GET" else f"POST {url} [{param}={test_value[:100]}]",
+                            response=resp.text[:500],
+                            remediation="Fix underlying injection AND improve input filtering. Use allowlists.",
+                            confidence=0.75,
+                            timestamp=datetime.now(timezone.utc).isoformat(),
+                        ))
+                        break
 
         self.findings = findings
         return findings
