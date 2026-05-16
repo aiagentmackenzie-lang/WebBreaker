@@ -1,10 +1,8 @@
 """Reconnaissance & Spidering module — discovers attack surface."""
 
 import re
-import asyncio
 from collections import deque
-from urllib.parse import urljoin, urlparse, parse_qs, urlencode
-from typing import Optional
+from urllib.parse import urljoin, urlparse, parse_qs
 from bs4 import BeautifulSoup
 
 from .config import ScanConfig
@@ -200,11 +198,16 @@ class ReconScanner:
                 if form["action"] not in self.visited:
                     queue.append((form["action"], depth + 1))
 
-        await self.client.close()
+        # Client will be closed by close() method, not here
         return self.results
 
     def get_all_urls(self) -> list[str]:
         return [r.url for r in self.results]
+
+    async def close(self):
+        """Close the HTTP client."""
+        if self.client:
+            await self.client.close()
 
     def get_all_forms(self) -> list[dict]:
         all_forms = []
