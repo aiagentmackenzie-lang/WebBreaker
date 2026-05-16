@@ -13,3 +13,9 @@ package-lock.json
 webbreaker-report-*.html
 webbreaker-report-*.pdf
 webbreaker-stix-*.json
+
+# Internal planning docs — not for public repo
+BUG_CATALOG.md
+CHANGELOG.md
+PRODUCTION_READINESS_PLAN.md
+PHASE4_INTEGRATION_PLAN.md
