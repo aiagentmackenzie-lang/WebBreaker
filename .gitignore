@@ -6,4 +6,6 @@ __pycache__/
 webbreaker.db
 dist/
 .env
-package-lock.json
+package-lock.jsonwebbreaker-report-*.html
+webbreaker-report-*.pdf
+webbreaker-stix-*.json

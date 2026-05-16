@@ -119,7 +119,6 @@ def scan(target, auth, modules, depth, threads, timeout, delay, proxy, auth_head
             "findings": [f.to_dict() for f in findings],
         }
         if output == "-":
-            import sys
             json.dump(results, sys.stdout, indent=2, default=str)
             sys.stdout.write("\n")
             console.print("\n[green]Results written to stdout[/]")
@@ -237,9 +236,32 @@ def findings(scan_id, severity, db):
 
 @cli.command()
 @click.argument("scan_id")
+@click.option("--format", "-f", "fmt", default="terminal", 
+              type=click.Choice(["terminal", "json", "html", "pdf", "stix"]),
+              help="Report format: terminal (default), json, html, pdf, stix")
+@click.option("--output", "-o", default=None, 
+              help="Output file path (required for html/pdf/stix, optional for json)")
+@click.option("--severity", "-s", default=None, 
+              help="Filter by severity (CRITICAL, HIGH, MEDIUM, LOW, INFO)")
 @click.option("--db", default="webbreaker.db", help="Database file path")
-def report(scan_id, db):
-    """Generate a summary report for a scan."""
+def report(scan_id, fmt, output, severity, db):
+    """Generate a report for a scan.
+
+    Formats:
+      terminal  Rich terminal summary (default)
+      json      JSON dump of findings and scan data
+      html      Professional HTML report with Jinja2 template
+      pdf       PDF report via WeasyPrint (requires pango)
+      stix      STIX 2.1 threat intelligence bundle
+
+    Examples:
+      webbreaker report abc12345
+      webbreaker report abc12345 -f json -o results.json
+      webbreaker report abc12345 -f html -o report.html
+      webbreaker report abc12345 -f pdf -o report.pdf
+      webbreaker report abc12345 -f stix -o findings.stix.json
+      webbreaker report abc12345 -s CRITICAL -f json
+    """
     from core.database import Database
     database = Database(db)
     database.connect()
@@ -250,29 +272,97 @@ def report(scan_id, db):
         database.close()
         return
 
-    findings_list = database.get_findings(scan_id)
+    findings_list = database.get_findings(scan_id, severity=severity)
+    recon_list = database.get_recon(scan_id)
     stats = database.get_stats(scan_id)
 
-    console.print(Panel(
-        f"[bold]Scan ID:[/] {scan_id}\n"
-        f"[bold]Target:[/] {scan_info['target']}\n"
-        f"[bold]Status:[/] {scan_info['status']}\n"
-        f"[bold]Started:[/] {scan_info['started_at']}\n"
-        f"[bold]Completed:[/] {scan_info.get('completed_at', 'N/A')}",
-        title="📊 Scan Report",
-        border_style="blue",
-    ))
+    # ── Terminal format (default) ───────────────────────────────────
+    if fmt == "terminal":
+        console.print(Panel(
+            f"[bold]Scan ID:[/] {scan_id}\n"
+            f"[bold]Target:[/] {scan_info['target']}\n"
+            f"[bold]Status:[/] {scan_info['status']}\n"
+            f"[bold]Started:[/] {scan_info['started_at']}\n"
+            f"[bold]Completed:[/] {scan_info.get('completed_at', 'N/A')}",
+            title="📊 Scan Report",
+            border_style="blue",
+        ))
 
-    console.print(f"\n[bold]Total Findings:[/] {stats['total_findings']}")
-    if stats["by_severity"]:
-        for sev, count in sorted(stats["by_severity"].items()):
-            console.print(f"  {sev}: {count}")
-    if stats["by_type"]:
-        console.print("\n[bold]By Type:[/]")
-        for t, count in sorted(stats["by_type"].items(), key=lambda x: -x[1]):
-            console.print(f"  {t}: {count}")
+        console.print(f"\n[bold]Total Findings:[/] {stats['total_findings']}")
+        if stats["by_severity"]:
+            for sev, count in sorted(stats["by_severity"].items()):
+                console.print(f"  {sev}: {count}")
+        if stats["by_type"]:
+            console.print("\n[bold]By Type:[/]")
+            for t, count in sorted(stats["by_type"].items(), key=lambda x: -x[1]):
+                console.print(f"  {t}: {count}")
 
-    console.print(f"\n[bold]URLs Discovered:[/] {stats['urls_discovered']}")
+        console.print(f"\n[bold]URLs Discovered:[/] {stats['urls_discovered']}")
+        database.close()
+        return
+
+    # ── JSON format ────────────────────────────────────────────────
+    if fmt == "json":
+        report_data = {
+            "scan": scan_info,
+            "findings": findings_list,
+            "recon": recon_list,
+            "stats": stats,
+        }
+        json_str = json.dumps(report_data, indent=2, default=str)
+
+        if output:
+            with open(output, "w") as f:
+                f.write(json_str)
+            console.print(f"[green]✓[/] JSON report saved to [bold]{output}[/]")
+        else:
+            console.print(json_str)
+        database.close()
+        return
+
+    # ── HTML format ─────────────────────────────────────────────────
+    if fmt == "html":
+        if not output:
+            output = f"webbreaker-report-{scan_id}.html"
+
+        from reports.html_report import save_html_report
+        save_html_report(output, scan_info, findings_list, recon=recon_list)
+        console.print(f"[green]✓[/] HTML report saved to [bold]{output}[/]")
+        database.close()
+        return
+
+    # ── PDF format ─────────────────────────────────────────────────
+    if fmt == "pdf":
+        if not output:
+            output = f"webbreaker-report-{scan_id}.pdf"
+
+        from reports.pdf_report import generate_pdf_report, is_weasyprint_available
+        if not is_weasyprint_available():
+            console.print("[red]✗ WeasyPrint is not available.[/]")
+            console.print("[dim]Install dependencies: pip install weasyprint && brew install pango[/]")
+            console.print("[dim]Falling back to HTML format.[/]")
+            html_path = output.replace(".pdf", ".html")
+            from reports.html_report import save_html_report
+            save_html_report(html_path, scan_info, findings_list, recon=recon_list)
+            console.print(f"[yellow]✓[/] HTML report saved to [bold]{html_path}[/] (PDF unavailable)")
+            database.close()
+            return
+
+        generate_pdf_report(scan_info, findings_list, output, recon=recon_list)
+        console.print(f"[green]✓[/] PDF report saved to [bold]{output}[/]")
+        database.close()
+        return
+
+    # ── STIX format ────────────────────────────────────────────────
+    if fmt == "stix":
+        if not output:
+            output = f"webbreaker-stix-{scan_id}.json"
+
+        from reports.stix_export import export_stix_json
+        export_stix_json(findings_list, scan_info.get("target", ""), scan_id, output_path=output)
+        console.print(f"[green]✓[/] STIX 2.1 bundle saved to [bold]{output}[/]")
+        database.close()
+        return
 
     database.close()
 
