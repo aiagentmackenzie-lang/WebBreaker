@@ -1,48 +1,106 @@
-version: "3.8"
+# WebBreaker — docker-compose.yml
+# API + Dashboard + Python scanner + SQLite persistence
+#
+# Quick start:
+#   docker compose up -d          # Start all services
+#   docker compose up api dashboard  # Start without Ollama
+#   docker compose logs -f api      # Follow API logs
+#
+# Services:
+#   api        — Fastify REST API + WebSocket (port 3100)
+#   dashboard  — React dashboard served by nginx (port 5173 → 80)
+#   scanner    — Python 3.12 with WebBreaker scanner (CLI)
+#   ollama     — Optional local LLM for AI triage (port 11434)
+
+x-webbreaker-env: &webbreaker-env
+  WEBBREAKER_DB: /data/webbreaker.db
+  WEBBREAKER_SCANNER_URL: http://scanner:8000
 
 services:
+  # ── API Server ───────────────────────────────────────────────────
   api:
     build:
       context: ./api
       dockerfile: Dockerfile
+    container_name: webbreaker-api
     ports:
       - "3100:3100"
     environment:
-      - WEBBREAKER_DB=/data/webbreaker.db
-      - WEBBREAKER_HOST=0.0.0.0
-      - WEBBREAKER_PORT=3100
+      <<: *webbreaker-env
+      WEBBREAKER_HOST: "0.0.0.0"
+      WEBBREAKER_PORT: "3100"
     volumes:
       - webbreaker-data:/data
+    depends_on:
+      scanner:
+        condition: service_started
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3100/scans"]
+      test: ["CMD", "curl", "-sf", "http://localhost:3100/health"]
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 10s
+    networks:
+      - webbreaker-net
 
+  # ── Dashboard ────────────────────────────────────────────────────
   dashboard:
     build:
       context: ./dashboard
       dockerfile: Dockerfile
+    container_name: webbreaker-dashboard
     ports:
       - "5173:80"
     depends_on:
       - api
+    restart: unless-stopped
+    networks:
+      - webbreaker-net
 
+  # ── Python Scanner ───────────────────────────────────────────────
+  scanner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: webbreaker-scanner
+    environment:
+      <<: *webbreaker-env
+      WEBBREAKER_DB: /data/webbreaker.db
+    volumes:
+      - webbreaker-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import core; print('ok')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - webbreaker-net
+
+  # ── Ollama (Optional — AI triage) ────────────────────────────────
   ollama:
     image: ollama/ollama:latest
+    container_name: webbreaker-ollama
     ports:
       - "11434:11434"
     volumes:
       - ollama-data:/root/.ollama
-    # For GPU support, uncomment:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+    restart: unless-stopped
+    profiles:
+      - ollama
+    networks:
+      - webbreaker-net
 
+# ── Volumes ────────────────────────────────────────────────────────
 volumes:
   webbreaker-data:
+    driver: local
   ollama-data:
+    driver: local
+
+# ── Network ────────────────────────────────────────────────────────
+networks:
+  webbreaker-net:
+    driver: bridge

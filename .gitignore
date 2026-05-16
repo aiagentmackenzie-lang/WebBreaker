@@ -1,11 +1,15 @@
 node_modules/
-.pytest_cache/
+.pycache/
 *.pyc
 __pycache__/
 *.db
 webbreaker.db
 dist/
 .env
-package-lock.jsonwebbreaker-report-*.html
+package-lock.json
+.venv/
+
+# Report artifacts
+webbreaker-report-*.html
 webbreaker-report-*.pdf
 webbreaker-stix-*.json
