@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebBreaker Security Report — {{ scan_data.target | e }}</title>
+<style>
+  @page {
+    size: A4;
+    margin: 2cm;
+    @bottom-center {
+      content: "Page " counter(page) " of " counter(pages);
+      font-size: 0.7em;
+      color: #64748b;
+    }
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+    background: #0f172a;
+    color: #f1f5f9;
+    padding: 40px;
+    line-height: 1.6;
+  }
+  .container { max-width: 1200px; margin: 0 auto; }
+
+  /* Header */
+  .header {
+    border-bottom: 3px solid #ef4444;
+    padding-bottom: 20px;
+    margin-bottom: 30px;
+  }
+  .header h1 { font-size: 2.2em; margin-bottom: 5px; }
+  .header .subtitle { color: #94a3b8; font-size: 1.1em; }
+
+  /* Meta bar */
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    margin-bottom: 30px;
+    padding: 15px 20px;
+    background: #1e293b;
+    border-radius: 8px;
+  }
+  .meta-item { }
+  .meta-label { font-size: 0.75em; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
+  .meta-value { font-weight: 600; }
+
+  /* Risk score */
+  .risk-score {
+    text-align: center;
+    padding: 20px;
+    margin-bottom: 30px;
+    border-radius: 8px;
+    background: #1e293b;
+  }
+  .risk-score .score { font-size: 3em; font-weight: bold; }
+  .risk-score .label { color: #94a3b8; font-size: 0.9em; }
+
+  /* Stats cards */
+  .stats { display: flex; gap: 12px; margin-bottom: 30px; flex-wrap: wrap; }
+  .stat {
+    flex: 1;
+    min-width: 80px;
+    padding: 12px 15px;
+    background: #1e293b;
+    border-radius: 8px;
+    text-align: center;
+    border-top: 3px solid var(--stat-color, #64748b);
+  }
+  .stat .number { font-size: 2em; font-weight: bold; }
+  .stat .label { font-size: 0.75em; color: #94a3b8; text-transform: uppercase; }
+
+  /* AI summary */
+  .ai-summary {
+    background: #1e293b;
+    border-left: 4px solid #06b6d4;
+    padding: 15px 20px;
+    margin-bottom: 25px;
+    border-radius: 0 8px 8px 0;
+  }
+  .ai-summary h3 { color: #06b6d4; margin-bottom: 8px; }
+
+  /* Sections */
+  h2 {
+    font-size: 1.4em;
+    margin: 30px 0 15px;
+    border-bottom: 2px solid #ef4444;
+    padding-bottom: 8px;
+  }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 0.85em; }
+  th {
+    text-align: left;
+    padding: 10px 12px;
+    background: #1e293b;
+    border-bottom: 2px solid #334155;
+    color: #94a3b8;
+    font-size: 0.8em;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  td { padding: 8px 12px; border-bottom: 1px solid #334155; vertical-align: top; }
+  tr:hover { background: rgba(255,255,255,0.03); }
+
+  code {
+    font-family: 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 0.9em;
+    background: #0f172a;
+    padding: 2px 6px;
+    border-radius: 3px;
+    word-break: break-all;
+  }
+
+  /* Confidence bar */
+  .confidence-bar {
+    background: #334155;
+    border-radius: 3px;
+    height: 8px;
+    width: 60px;
+    display: inline-block;
+    vertical-align: middle;
+    overflow: hidden;
+  }
+  .confidence-fill {
+    height: 100%;
+    border-radius: 3px;
+  }
+
+  /* Severity badges */
+  .severity-critical { color: #ef4444; font-weight: bold; }
+  .severity-high { color: #f97316; font-weight: bold; }
+  .severity-medium { color: #eab308; font-weight: bold; }
+  .severity-low { color: #06b6d4; font-weight: bold; }
+  .severity-info { color: #94a3b8; }
+
+  /* Finding detail */
+  .finding-detail {
+    background: #1e293b;
+    padding: 12px 15px;
+    margin-bottom: 15px;
+    border-radius: 6px;
+    border-left: 4px solid var(--finding-color, #64748b);
+  }
+  .finding-detail h4 { margin-bottom: 5px; }
+  .finding-detail .meta-inline { color: #94a3b8; font-size: 0.85em; }
+  .finding-detail pre {
+    background: #0f172a;
+    padding: 10px;
+    border-radius: 4px;
+    overflow-x: auto;
+    font-size: 0.8em;
+    margin: 8px 0;
+  }
+
+  /* Footer */
+  .footer {
+    margin-top: 40px;
+    padding-top: 20px;
+    border-top: 1px solid #334155;
+    color: #64748b;
+    font-size: 0.8em;
+  }
+  .footer a { color: #06b6d4; text-decoration: none; }
+
+  /* Print-specific */
+  @media print {
+    body { background: white; color: black; }
+    .stat { background: #f8f8f8; }
+    th { background: #eee; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <h1>🔥 WebBreaker Security Report</h1>
+    <div class="subtitle">Web Application Penetration Testing Toolkit — Confidential</div>
+  </div>
+
+  <!-- Scan Metadata -->
+  <div class="meta">
+    <div class="meta-item">
+      <div class="meta-label">Target</div>
+      <div class="meta-value">{{ scan_data.target | e }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="meta-label">Scan ID</div>
+      <div class="meta-value">{{ scan_data.id | e }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="meta-label">Started</div>
+      <div class="meta-value">{{ scan_data.started_at | e }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="meta-label">Completed</div>
+      <div class="meta-value">{{ scan_data.get('completed_at', 'N/A') | e }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="meta-label">Status</div>
+      <div class="meta-value">{{ scan_data.status | e }}</div>
+    </div>
+  </div>
+
+  <!-- Risk Score -->
+  <div class="risk-score">
+    <div class="score" style="color: {{ risk_color }}">{{ risk_score }}</div>
+    <div class="label">Overall Risk Score (0-100)</div>
+  </div>
+
+  <!-- Stats -->
+  <h2>📊 Findings Summary</h2>
+  <div class="stats">
+    {% for sev in severities %}
+    <div class="stat" style="--stat-color: {{ sev.color }};">
+      <div class="number" style="color:{{ sev.color }}">{{ sev.count }}</div>
+      <div class="label">{{ sev.name }}</div>
+    </div>
+    {% endfor %}
+    <div class="stat" style="--stat-color: #f1f5f9;">
+      <div class="number" style="color:#f1f5f9">{{ total_findings }}</div>
+      <div class="label">Total</div>
+    </div>
+  </div>
+
+  {% if ai_summary %}
+  <div class="ai-summary">
+    <h3>🤖 AI Executive Summary</h3>
+    <p>{{ ai_summary | e }}</p>
+  </div>
+  {% endif %}
+
+  <!-- Findings Table -->
+  <h2>🚨 Findings</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Severity</th>
+        <th>Type</th>
+        <th>URL</th>
+        <th>Parameter</th>
+        <th>Payload</th>
+        <th>Evidence</th>
+        <th>Remediation</th>
+        <th>Confidence</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for f in findings %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td class="severity-{{ f.severity | lower }}">{{ f.severity }}</td>
+        <td>{{ f.type | e }}</td>
+        <td><code>{{ f.url | e }}</code></td>
+        <td>{{ f.parameter | e }}</td>
+        <td><code>{{ (f.payload | e)[:80] }}</code></td>
+        <td>{{ (f.evidence | e)[:100] }}</td>
+        <td>{{ (f.remediation | e)[:80] if f.remediation else '—' }}</td>
+        <td>
+          {% if f.confidence is defined and f.confidence is not none %}
+            {{ (f.confidence * 100) | int }}%
+          {% else %}
+            100%
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- Detailed Findings -->
+  <h2>🔍 Detailed Findings</h2>
+  {% for f in findings %}
+  <div class="finding-detail" style="--finding-color: {{ severity_colors.get(f.severity, '#64748b') }}">
+    <h4>
+      <span class="severity-{{ f.severity | lower }}">{{ f.severity }}</span>
+      — {{ f.type | e }} on {{ f.parameter | e }}
+    </h4>
+    <div class="meta-inline">
+      URL: <code>{{ f.url | e }}</code>
+      &nbsp;|&nbsp; Confidence:
+      {% if f.confidence is defined and f.confidence is not none %}
+        {{ (f.confidence * 100) | int }}%
+      {% else %}
+        100%
+      {% endif %}
+    </div>
+
+    {% if f.payload %}
+    <p><strong>Payload:</strong> <code>{{ f.payload | e }}</code></p>
+    {% endif %}
+
+    {% if f.evidence %}
+    <p><strong>Evidence:</strong> {{ f.evidence | e }}</p>
+    {% endif %}
+
+    {% if f.remediation %}
+    <p><strong>Remediation:</strong> {{ f.remediation | e }}</p>
+    {% endif %}
+
+    {% if f.request %}
+    <details>
+      <summary>Request</summary>
+      <pre>{{ f.request | e }}</pre>
+    </details>
+    {% endif %}
+
+    {% if f.response %}
+    <details>
+      <summary>Response</summary>
+      <pre>{{ f.response | e }}</pre>
+    </details>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  <!-- Recon -->
+  {% if recon %}
+  <h2>🗺️ Reconnaissance</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>URL</th>
+        <th>Status</th>
+        <th>Method</th>
+        <th>Size</th>
+        <th>Tech</th>
+        <th>Depth</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in recon[:200] %}
+      <tr>
+        <td><code>{{ r.url | e }}</code></td>
+        <td>{{ r.status_code | default('—') }}</td>
+        <td>{{ r.method | default('GET') }}</td>
+        <td>{{ r.content_length | default(0) }}</td>
+        <td>{{ (r.tech | e) if r.tech else '—' }}</td>
+        <td>{{ r.depth | default(0) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <!-- Footer -->
+  <div class="footer">
+    <p>Generated by <strong>WebBreaker v1.0.0</strong> — Web Application Penetration Testing Toolkit</p>
+    <p>Report generated: {{ generated_at }} UTC</p>
+    <p>For authorized security assessments only. This report is confidential.</p>
+  </div>
+
+</div>
+</body>
+</html>

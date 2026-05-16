@@ -1,22 +1,89 @@
-"""HTML Report generator — professional reports with embedded evidence."""
+"""HTML Report generator — professional reports with Jinja2 templates."""
 
-import html
-import json
+import os
 from datetime import datetime, timezone
+from typing import Optional
+
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+# Template directory (relative to this file)
+_TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates")
+
+# Severity colors for both HTML and PDF
+SEVERITY_COLORS = {
+    "CRITICAL": "#ef4444",
+    "HIGH": "#f97316",
+    "MEDIUM": "#eab308",
+    "LOW": "#06b6d4",
+    "INFO": "#94a3b8",
+}
+
+# Severity weights for risk score calculation
+SEVERITY_WEIGHTS = {
+    "CRITICAL": 10,
+    "HIGH": 7,
+    "MEDIUM": 4,
+    "LOW": 2,
+    "INFO": 0.5,
+}
 
 
-def generate_html_report(scan_data: dict, findings: list[dict], recon: list[dict] = None, ai_summary: str = "") -> str:
-    """Generate a professional HTML report."""
+def calculate_risk_score(findings: list[dict]) -> tuple[int, str]:
+    """Calculate an overall risk score (0-100) from findings.
 
-    severity_colors = {
-        "CRITICAL": "#ef4444",
-        "HIGH": "#f97316",
-        "MEDIUM": "#eab308",
-        "LOW": "#06b6d4",
-        "INFO": "#94a3b8",
-    }
+    Returns (score, color) where color is a CSS hex color.
+    """
+    if not findings:
+        return 0, "#22c55e"  # Green — no findings
 
-    # Count by severity
+    total_weight = sum(
+        SEVERITY_WEIGHTS.get(f.get("severity", "INFO"), 0.5) for f in findings
+    )
+    # Normalize: a single critical = ~30/100, scales logarithmically
+    import math
+    raw = min(100, int(10 * math.log2(total_weight + 1)))
+
+    if raw >= 80:
+        color = "#ef4444"  # Red
+    elif raw >= 60:
+        color = "#f97316"  # Orange
+    elif raw >= 40:
+        color = "#eab308"  # Yellow
+    elif raw >= 20:
+        color = "#06b6d4"  # Cyan
+    else:
+        color = "#22c55e"  # Green
+
+    return raw, color
+
+
+def generate_html_report(
+    scan_data: dict,
+    findings: list[dict],
+    recon: Optional[list[dict]] = None,
+    ai_summary: str = "",
+) -> str:
+    """Generate a professional HTML report using Jinja2 template.
+
+    Args:
+        scan_data: Scan metadata dict with keys: id, target, status, started_at, completed_at
+        findings: List of finding dicts from Database.get_findings()
+        recon: Optional list of recon dicts from Database.get_recon()
+        ai_summary: Optional AI-generated executive summary text
+
+    Returns:
+        Complete HTML string for the report.
+    """
+    env = Environment(
+        loader=FileSystemLoader(_TEMPLATE_DIR),
+        autoescape=select_autoescape(["html"]),
+    )
+    template = env.get_template("report.html")
+
+    # Calculate risk score
+    risk_score, risk_color = calculate_risk_score(findings)
+
+    # Build severity summary
     by_severity = {}
     by_type = {}
     for f in findings:
@@ -25,105 +92,75 @@ def generate_html_report(scan_data: dict, findings: list[dict], recon: list[dict
         t = f.get("type", "Unknown")
         by_type[t] = by_type.get(t, 0) + 1
 
-    findings_rows = ""
+    severities = []
+    for sev_name in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]:
+        severities.append({
+            "name": sev_name,
+            "count": by_severity.get(sev_name, 0),
+            "color": SEVERITY_COLORS.get(sev_name, "#94a3b8"),
+        })
+
+    # Add computed fields to findings for template
+    enriched_findings = []
     for f in findings:
-        color = severity_colors.get(f.get("severity", "INFO"), "#94a3b8")
-        findings_rows += f"""
-        <tr>
-          <td><span style="color:{color};font-weight:bold">{html.escape(str(f.get('severity','')))}</span></td>
-          <td>{html.escape(str(f.get('type','')))}</td>
-          <td><code>{html.escape(str(f.get('url','')))}</code></td>
-          <td>{html.escape(str(f.get('parameter','')))}</td>
-          <td><code>{html.escape(str(f.get('payload',''))[:60])}</code></td>
-          <td>{html.escape(str(f.get('evidence',''))[:80])}</td>
-          <td>{html.escape(str(f.get('remediation',''))[:80])}</td>
-          <td>{int(f.get('confidence',1)*100)}%</td>
-        </tr>"""
+        ef = dict(f)
+        # Ensure confidence is a float 0-1
+        if "confidence" not in ef or ef["confidence"] is None:
+            ef["confidence"] = 1.0
+        ef["confidence"] = float(ef["confidence"])
+        enriched_findings.append(ef)
 
-    recon_rows = ""
+    # Add computed fields to recon for template
+    enriched_recon = []
     if recon:
-        for r in recon[:50]:
-            recon_rows += f"""
-        <tr>
-          <td><code>{html.escape(str(r.get('url','')))}</code></td>
-          <td>{html.escape(str(r.get('status_code','')))}</td>
-          <td>{html.escape(str(r.get('method','GET')))}</td>
-          <td>{html.escape(str(r.get('content_length',0)))}</td>
-          <td>{html.escape(str(r.get('tech','')))}</td>
-          <td>{html.escape(str(r.get('depth',0)))}</td>
-        </tr>"""
+        for r in recon:
+            er = dict(r)
+            # tech field may be comma-separated string or empty
+            if "tech" not in er or er["tech"] is None:
+                er["tech"] = ""
+            enriched_recon.append(er)
 
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>WebBreaker Security Report — {html.escape(scan_data.get('target',''))}</title>
-<style>
-  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #f1f5f9; padding: 40px; }}
-  .container {{ max-width: 1200px; margin: 0 auto; }}
-  h1 {{ font-size: 2em; margin-bottom: 8px; }}
-  h2 {{ font-size: 1.5em; margin: 30px 0 15px; border-bottom: 2px solid #ef4444; padding-bottom: 8px; }}
-  .meta {{ color: #94a3b8; margin-bottom: 30px; }}
-  .stats {{ display: flex; gap: 15px; margin-bottom: 30px; flex-wrap: wrap; }}
-  .stat {{ padding: 15px 20px; background: #1e293b; border-radius: 8px; min-width: 100px; text-align: center; }}
-  .stat .number {{ font-size: 2em; font-weight: bold; }}
-  .stat .label {{ font-size: 0.8em; color: #94a3b8; }}
-  table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 0.85em; }}
-  th {{ text-align: left; padding: 10px; background: #1e293b; border-bottom: 2px solid #334155; color: #94a3b8; }}
-  td {{ padding: 8px 10px; border-bottom: 1px solid #334155; vertical-align: top; }}
-  tr:hover {{ background: rgba(255,255,255,0.03); }}
-  code {{ font-family: 'Fira Code', monospace; font-size: 0.9em; background: #0f172a; padding: 2px 5px; border-radius: 3px; }}
-  .ai-summary {{ background: #1e293b; border-left: 4px solid #06b6d4; padding: 15px 20px; margin-bottom: 20px; border-radius: 0 8px 8px 0; }}
-  .footer {{ margin-top: 40px; padding-top: 20px; border-top: 1px solid #334155; color: #64748b; font-size: 0.8em; }}
-</style>
-</head>
-<body>
-<div class="container">
-  <h1>🔥 WebBreaker Security Report</h1>
-  <div class="meta">
-    <strong>Target:</strong> {html.escape(scan_data.get('target',''))} &nbsp;|&nbsp;
-    <strong>Scan ID:</strong> {html.escape(scan_data.get('id',''))} &nbsp;|&nbsp;
-    <strong>Date:</strong> {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} &nbsp;|&nbsp;
-    <strong>Status:</strong> {html.escape(scan_data.get('status',''))}
-  </div>
-
-  {"<div class='ai-summary'><strong>🤖 AI Executive Summary</strong><br/>" + html.escape(ai_summary) + "</div>" if ai_summary else ""}
-
-  <h2>📊 Summary</h2>
-  <div class="stats">
-    <div class="stat"><div class="number" style="color:#ef4444">{by_severity.get('CRITICAL',0)}</div><div class="label">CRITICAL</div></div>
-    <div class="stat"><div class="number" style="color:#f97316">{by_severity.get('HIGH',0)}</div><div class="label">HIGH</div></div>
-    <div class="stat"><div class="number" style="color:#eab308">{by_severity.get('MEDIUM',0)}</div><div class="label">MEDIUM</div></div>
-    <div class="stat"><div class="number" style="color:#06b6d4">{by_severity.get('LOW',0)}</div><div class="label">LOW</div></div>
-    <div class="stat"><div class="number" style="color:#94a3b8">{by_severity.get('INFO',0)}</div><div class="label">INFO</div></div>
-    <div class="stat"><div class="number" style="color:#f1f5f9">{len(findings)}</div><div class="label">TOTAL</div></div>
-  </div>
-
-  <h2>🚨 Findings</h2>
-  <table>
-    <thead>
-      <tr><th>Severity</th><th>Type</th><th>URL</th><th>Parameter</th><th>Payload</th><th>Evidence</th><th>Remediation</th><th>Confidence</th></tr>
-    </thead>
-    <tbody>{findings_rows}</tbody>
-  </table>
-
-  {"<h2>🗺️ Reconnaissance</h2><table><thead><tr><th>URL</th><th>Status</th><th>Method</th><th>Size</th><th>Tech</th><th>Depth</th></tr></thead><tbody>" + recon_rows + "</tbody></table>" if recon_rows else ""}
-
-  <div class="footer">
-    <p>Generated by WebBreaker v1.0.0 — Web Application Penetration Testing Toolkit</p>
-    <p>For authorized security assessments only. This report is confidential.</p>
-  </div>
-</div>
-</body>
-</html>"""
+    html = template.render(
+        scan_data=scan_data,
+        findings=enriched_findings,
+        recon=enriched_recon,
+        ai_summary=ai_summary,
+        risk_score=risk_score,
+        risk_color=risk_color,
+        severities=severities,
+        total_findings=len(findings),
+        severity_colors=SEVERITY_COLORS,
+        generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
+    )
 
     return html
 
 
-def save_html_report(output_path: str, scan_data: dict, findings: list[dict], recon: list[dict] = None, ai_summary: str = ""):
-    """Save HTML report to file."""
+def save_html_report(
+    output_path: str,
+    scan_data: dict,
+    findings: list[dict],
+    recon: Optional[list[dict]] = None,
+    ai_summary: str = "",
+) -> str:
+    """Generate and save HTML report to file.
+
+    Args:
+        output_path: Path to write the HTML file
+        scan_data: Scan metadata dict
+        findings: List of finding dicts
+        recon: Optional list of recon dicts
+        ai_summary: Optional AI-generated executive summary
+
+    Returns:
+        The output_path that was written.
+    """
     html = generate_html_report(scan_data, findings, recon, ai_summary)
-    with open(output_path, "w") as f:
+
+    # Ensure output directory exists
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
+
     return output_path
