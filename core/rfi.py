@@ -1,7 +1,6 @@
 """Remote File Inclusion scanner — RFI detection with callback server support."""
 
 import os
-import asyncio
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from datetime import datetime, timezone
 from typing import Optional

@@ -1,6 +1,5 @@
 """Local File Inclusion scanner — path traversal, null byte, PHP wrappers."""
 
-import asyncio
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from datetime import datetime, timezone
 from typing import Optional

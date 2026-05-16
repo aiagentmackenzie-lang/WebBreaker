@@ -1,12 +1,8 @@
 """Session Analysis module — cookie security, session fixation, token entropy."""
 
-import re
 import math
-import asyncio
 from collections import Counter
-from urllib.parse import urlparse
 from datetime import datetime, timezone
-from typing import Optional
 
 from .config import Finding, Severity, FindingType, ScanConfig
 from .http_client import HttpClient

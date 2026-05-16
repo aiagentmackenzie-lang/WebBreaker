@@ -74,12 +74,13 @@ cd dashboard && npm install && npm run dev
 
 For production, use the provided Dockerfiles for API and Dashboard (see `api/Dockerfile` and `dashboard/Dockerfile`).
 
-> **Note:** There is no `docker-compose.yml` in the repo. Create one or use the Dockerfiles directly.
+> **Note:** Use the provided `docker-compose.yml` for local development, or the Dockerfiles directly for production deployment.
 
 ## API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| GET | `/health` | Health check |
 | POST | `/scan` | Start a new scan |
 | GET | `/scan/:id` | Get scan status |
 | GET | `/scan/:id/findings` | Get findings |
@@ -123,7 +124,8 @@ When Ollama is unavailable, triage falls back to rule-based prioritization.
 | API | Node.js + Fastify + WebSocket + better-sqlite3 |
 | Dashboard | React 19 + Vite + Tailwind 4 |
 | Database | SQLite (WAL mode) |
-| Export | STIX 2.1 |
+| Export | STIX 2.1, HTML, PDF |
+| Reports | Jinja2 HTML + WeasyPrint PDF |
 
 ## License
 

@@ -1,7 +1,5 @@
 """Parameter Fuzzing module — discovers hidden params and anomalies via mutation."""
 
-import asyncio
-import json
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from datetime import datetime, timezone
 from typing import Optional

@@ -402,7 +402,7 @@ class TestCMDI:
         assert scanner._check_output_marker("No marker here") is False
 
     def test_bypass_payloads_not_empty(self):
-        from core.cmdi import BYPASS_PAYLOADS, MARKER
+        from core.cmdi import BYPASS_PAYLOADS
         assert len(BYPASS_PAYLOADS) > 0
         # All bypass payloads should contain the marker or test for it
         for p in BYPASS_PAYLOADS:
@@ -585,7 +585,6 @@ class TestTokenBucket:
         assert bucket.tokens == 5.0
 
     def test_bucket_acquire(self):
-        import asyncio
         from core.http_client import TokenBucket
         bucket = TokenBucket(rate=100, burst=100)
         # Simulate token consumption without async

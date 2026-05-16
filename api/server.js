@@ -391,56 +391,141 @@ app.post('/scan/:id/report', async (req, reply) => {
 
   if (format === 'stix') {
     const now = new Date().toISOString();
+    const validUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
     const ATTACK_MAP = {
-      'SQL Injection': { attack: 'T1190', capec: 'CAPEC-108', name: 'Exploit Public-Facing Application' },
-      'Cross-Site Scripting': { attack: 'T1059.007', capec: 'CAPEC-63', name: 'XSS' },
-      'CSRF': { capec: 'CAPEC-62', name: 'Cross-Site Request Forgery' },
-      'Command Injection': { attack: 'T1190', capec: 'CAPEC-88', name: 'OS Command Injection' },
-      'Local File Inclusion': { attack: 'T1083', capec: 'CAPEC-31', name: 'Path Traversal' },
-      'Remote File Inclusion': { attack: 'T1083', capec: 'CAPEC-31', name: 'Remote File Inclusion' },
-      'Parameter Fuzzing': { attack: 'T1595', name: 'Active Scanning' },
-      'Security Headers': { attack: 'T1595', name: 'Configuration Weakness' },
-      'Session Analysis': { attack: 'T1539', name: 'Steal Session' },
-      'Directory Discovery': { attack: 'T1083', capec: 'CAPEC-116', name: 'Directory Discovery' },
+      'SQL Injection': { attack: 'T1190', capec: 'CAPEC-108', name: 'Exploit Public-Facing Application', kill_chain: [{ kill_chain_name: 'mitre-attack', phase_name: 'initial-access' }] },
+      'Cross-Site Scripting': { attack: 'T1059.007', capec: 'CAPEC-63', name: 'XSS', kill_chain: [{ kill_chain_name: 'mitre-attack', phase_name: 'execution' }] },
+      'CSRF': { capec: 'CAPEC-62', name: 'Cross-Site Request Forgery', kill_chain: [{ kill_chain_name: 'mitre-attack', phase_name: 'initial-access' }] },
+      'Command Injection': { attack: 'T1190', capec: 'CAPEC-88', name: 'OS Command Injection', kill_chain: [{ kill_chain_name: 'mitre-attack', phase_name: 'execution' }] },
+      'Local File Inclusion': { attack: 'T1083', capec: 'CAPEC-31', name: 'Path Traversal', kill_chain: [{ kill_chain_name: 'mitre-attack', phase_name: 'discovery' }] },
+      'Remote File Inclusion': { attack: 'T1083', capec: 'CAPEC-31', name: 'Remote File Inclusion', kill_chain: [{ kill_chain_name: 'mitre-attack', phase_name: 'initial-access' }] },
+      'Parameter Fuzzing': { attack: 'T1595', name: 'Active Scanning', kill_chain: [{ kill_chain_name: 'mitre-attack', phase_name: 'reconnaissance' }] },
+      'Security Headers': { attack: 'T1595', name: 'Configuration Weakness', kill_chain: [{ kill_chain_name: 'mitre-attack', phase_name: 'discovery' }] },
+      'Session Analysis': { attack: 'T1539', name: 'Steal Session', kill_chain: [{ kill_chain_name: 'mitre-attack', phase_name: 'credential-access' }] },
+      'Directory Discovery': { attack: 'T1083', capec: 'CAPEC-116', name: 'Directory Discovery', kill_chain: [{ kill_chain_name: 'mitre-attack', phase_name: 'discovery' }] },
     };
+
+    // Generate STIX 2.1 UUIDv5 IDs
+    function stixId(type, deterministic) {
+      const namespace = '00abedb4-aa42-466c-9c01-fed23315a9b7';
+      const hash = crypto.createHash('sha1').update(namespace + deterministic).digest();
+      hash[6] = (hash[6] & 0x0f) | 0x50;  // version 5
+      hash[8] = (hash[8] & 0x3f) | 0x80;  // variant 10xx
+      const uuid = [
+        hash.toString('hex', 0, 4), hash.toString('hex', 4, 6),
+        hash.toString('hex', 6, 8), hash.toString('hex', 8, 10),
+        hash.toString('hex', 10, 16)
+      ].join('-');
+      return `${type}--${uuid}`;
+    }
+
+    const identityId = stixId('identity', 'webbreaker-scanner');
+    const targetId = stixId('infrastructure', `target-${scan.target}`);
+
     const objects = [{
-      type: 'identity', spec_version: '2.1', id: 'identity--webbreaker-1-0-0',
+      type: 'identity', spec_version: '2.1', id: identityId,
       created: now, modified: now, name: 'WebBreaker', identity_class: 'software',
+      description: 'WebBreaker Web Application Penetration Testing Toolkit',
+      sectors: ['technology'],
     }, {
-      type: 'infrastructure', spec_version: '2.1', id: `infrastructure--${req.params.id}`,
-      created: now, modified: now, name: `Assessed Target: ${scan.target}`, infrastructure_types: ['targeted'],
+      type: 'infrastructure', spec_version: '2.1', id: targetId,
+      created_by_ref: identityId, created: now, modified: now,
+      name: `Assessed Target: ${scan.target}`, infrastructure_types: ['targeted'],
     }];
+
     for (let i = 0; i < findings.length; i++) {
       const f = findings[i];
-      const mapping = ATTACK_MAP[f.type] || { name: f.type };
-      const vulnId = `vulnerability--${req.params.id}-${String(i).padStart(4, '0')}`;
-      const attackId = `attack-pattern--${req.params.id}-${String(i).padStart(4, '0')}`;
-      const extRefs = [{ source_name: 'url', url: f.url }];
-      if (mapping.attack) extRefs.push({ source_name: 'mitre-attack', external_id: mapping.attack });
-      if (mapping.capec) extRefs.push({ source_name: 'capec', external_id: mapping.capec });
-      objects.push({
-        type: 'vulnerability', spec_version: '2.1', id: vulnId, created: now, modified: now,
-        name: `${f.type}: ${f.parameter}`, description: f.evidence, severity: f.severity.toLowerCase(), external_references: extRefs,
-      });
-      objects.push({
-        type: 'attack-pattern', spec_version: '2.1', id: attackId, created: now, modified: now, name: mapping.name,
-      });
-      objects.push({
-        type: 'relationship', spec_version: '2.1', id: `relationship--${req.params.id}-${String(i).padStart(4, '0')}-targets`,
-        created: now, modified: now, relationship_type: 'targets', source_ref: vulnId, target_ref: `infrastructure--${req.params.id}`,
-      });
-      if (f.payload) {
-        objects.push({
-          type: 'indicator', spec_version: '2.1', id: `indicator--${req.params.id}-${String(i).padStart(4, '0')}`,
-          created: now, modified: now, name: `Payload: ${f.payload.slice(0, 50)}`,
-          pattern: `[url:value = '${(f.url || '').replace(/'/g, "\\'")}']`, pattern_type: 'stix', valid_from: now,
+      const mapping = ATTACK_MAP[f.type] || { name: f.type, kill_chain: [] };
+      const detStr = `finding-${req.params.id}-${String(i).padStart(4, '0')}-${f.type}-${f.parameter || ''}`;
+
+      const vulnId = stixId('vulnerability', detStr);
+      const attackId = stixId('attack-pattern', `attack-${detStr}`);
+
+      // External references
+      const extRefs = [{ source_name: 'url', url: f.url || '' }];
+      if (mapping.attack) {
+        extRefs.push({
+          source_name: 'mitre-attack', external_id: mapping.attack,
+          url: `https://attack.mitre.org/techniques/${mapping.attack.replace('.', '/')}`,
         });
       }
+      if (mapping.capec) {
+        extRefs.push({
+          source_name: 'capec', external_id: mapping.capec,
+          url: `https://capec.mitre.org/data/definitions/${mapping.capec.replace('CAPEC-', '')}.html`,
+        });
+      }
+
+      // Vulnerability
+      const vuln = {
+        type: 'vulnerability', spec_version: '2.1', id: vulnId,
+        created_by_ref: identityId, created: now, modified: now,
+        name: `${f.type}: ${f.parameter || ''}`, description: f.evidence || '',
+        severity: (f.severity || 'INFO').toLowerCase(), external_references: extRefs,
+      };
+      if (f.confidence) vuln.confidence = Math.round(f.confidence * 100);
+      objects.push(vuln);
+
+      // Attack Pattern
+      const attackObj = {
+        type: 'attack-pattern', spec_version: '2.1', id: attackId,
+        created_by_ref: identityId, created: now, modified: now,
+        name: mapping.name, external_references: [],
+      };
+      if (mapping.attack) {
+        attackObj.external_references.push({
+          source_name: 'mitre-attack', external_id: mapping.attack,
+          url: `https://attack.mitre.org/techniques/${mapping.attack.replace('.', '/')}`,
+        });
+      }
+      if (mapping.capec) {
+        attackObj.external_references.push({
+          source_name: 'capec', external_id: mapping.capec,
+          url: `https://capec.mitre.org/data/definitions/${mapping.capec.replace('CAPEC-', '')}.html`,
+        });
+      }
+      if (mapping.kill_chain) attackObj.kill_chain_phases = mapping.kill_chain;
+      objects.push(attackObj);
+
+      // Relationship: vulnerability targets infrastructure
+      objects.push({
+        type: 'relationship', spec_version: '2.1',
+        id: stixId('relationship', `rel-targets-${detStr}`),
+        created_by_ref: identityId, created: now, modified: now,
+        relationship_type: 'targets', source_ref: vulnId, target_ref: targetId,
+        description: `Vulnerability ${f.type} targets ${scan.target}`,
+      });
+
+      // Relationship: attack pattern uses vulnerability
+      objects.push({
+        type: 'relationship', spec_version: '2.1',
+        id: stixId('relationship', `rel-uses-${detStr}`),
+        created_by_ref: identityId, created: now, modified: now,
+        relationship_type: 'uses', source_ref: attackId, target_ref: vulnId,
+        description: `Attack pattern ${mapping.name} uses vulnerability ${f.type}`,
+      });
+
+      // Indicator (payload-based)
+      if (f.payload) {
+        const urlValue = (f.url || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        const indicatorObj = {
+          type: 'indicator', spec_version: '2.1',
+          id: stixId('indicator', `indicator-${detStr}`),
+          created_by_ref: identityId, created: now, modified: now,
+          name: `Payload: ${f.payload.slice(0, 50)}`,
+          pattern: `[url:value = '${urlValue}']`, pattern_type: 'stix', pattern_version: '2.1',
+          valid_from: now, valid_until: validUntil,
+          external_references: [{ source_name: 'url', url: f.url || '' }],
+        };
+        if (mapping.kill_chain) indicatorObj.kill_chain_phases = mapping.kill_chain;
+        objects.push(indicatorObj);
+      }
     }
-    return { type: 'bundle', id: `bundle--${req.params.id}`, objects };
+    return { type: 'bundle', id: stixId('bundle', `bundle-${req.params.id}`), objects };
   }
 
   return report;
+
 });
 
 // GET /scans — List all scans

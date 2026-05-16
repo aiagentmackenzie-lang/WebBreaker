@@ -16,16 +16,35 @@ console = Console()
 
 def print_banner():
     console.print(Panel(
-        "[bold red]🔥 WebBreaker[/]\n[dim]Web Application Penetration Testing Toolkit v1.0[/]\n"
+        "[bold red]🔥 WebBreaker[/]\n[dim]Web Application Penetration Testing Toolkit v1.1[/]\n"
         "[dim]For authorized security assessments only.[/]",
         border_style="red",
     ))
 
 
 @click.group()
-@click.version_option(version="1.0.0")
+@click.version_option(version="1.1.0")
 def cli():
-    """WebBreaker — Web Application Penetration Testing Toolkit."""
+    """WebBreaker — Web Application Penetration Testing Toolkit.
+
+    For authorized security assessments only.
+
+    Modules: recon, sqli, xss, csrf, cmdi, lfi, rfi, dirbrute, fuzz, headers, session
+
+    Examples:
+      webbreaker scan https://example.com --auth
+      webbreaker scan https://example.com --auth -m sqli,xss
+      webbreaker scan https://example.com --auth --stealth
+      webbreaker fingerprint https://example.com --auth
+      webbreaker report <scan_id> -f html -o report.html
+      webbreaker report <scan_id> -f stix -o findings.stix.json
+
+    Exit codes:
+      0 — No HIGH/CRITICAL findings
+      1 — HIGH findings found
+      2 — CRITICAL findings found
+      1 — Authorization error or invalid input
+    """
     pass
 
 
@@ -58,7 +77,21 @@ def cli():
 @click.option("--output", "-o", default=None, help="Output file (JSON format)")
 @click.option("--db", default="webbreaker.db", help="Database file path (default: webbreaker.db)")
 def scan(target, auth, modules, depth, threads, timeout, delay, proxy, auth_header, cookie, auth_type, auth_url, auth_username, auth_password, auth_username_field, auth_password_field, auth_csrf_field, auth_method, auth_success_pattern, auth_failure_pattern, scope, stealth, rate_limit, no_verify_tls, scan_id, output, db):
-    """Run a full web application pentest scan against TARGET."""
+    """Run a full web application pentest scan against TARGET.
+
+    TARGET must be a valid HTTP/HTTPS URL. The --auth flag is
+    mandatory to confirm you have authorized access.
+
+    Modules: recon, sqli, xss, csrf, cmdi, lfi, rfi, dirbrute,
+    fuzz, headers, session (default: all)
+
+    Examples:
+      webbreaker scan https://example.com --auth
+      webbreaker scan https://example.com --auth -m sqli,xss
+      webbreaker scan https://example.com --auth --stealth -o results.json
+      webbreaker scan https://example.com --auth --auth-type basic --auth-username admin --auth-password pass
+      webbreaker scan https://example.com --auth --scan-id custom-id --db /path/to/db
+    """
     print_banner()
 
     if not auth:
@@ -163,7 +196,14 @@ def scan(target, auth, modules, depth, threads, timeout, delay, proxy, auth_head
 @click.argument("target")
 @click.option("--auth", is_flag=True, required=True, help="Confirm authorized testing")
 def fingerprint(target, auth):
-    """Quick technology fingerprint of TARGET (no active scanning)."""
+    """Quick technology fingerprint of TARGET (no active scanning).
+
+    Performs a single GET request to identify the server, framework,
+    and security headers. No vulnerability scanning.
+
+    Example:
+      webbreaker fingerprint https://example.com --auth
+    """
     print_banner()
     from core.config import ScanConfig
     from core.recon import ReconScanner
@@ -188,7 +228,13 @@ def fingerprint(target, auth):
 @cli.command()
 @click.option("--db", default="webbreaker.db", help="Database file path")
 def scans(db):
-    """List all previous scans."""
+    """List all previous scans from the database.
+
+    Shows scan ID, target, status, findings count, and start time.
+
+    Example:
+      webbreaker scans
+    """
     from core.database import Database
     database = Database(db)
     database.connect()
@@ -224,7 +270,14 @@ def scans(db):
 @click.option("--severity", "-s", default=None, help="Filter by severity (CRITICAL, HIGH, MEDIUM, LOW, INFO)")
 @click.option("--db", default="webbreaker.db", help="Database file path")
 def findings(scan_id, severity, db):
-    """View findings for a specific scan."""
+    """View findings for a specific scan.
+
+    Filter by severity: CRITICAL, HIGH, MEDIUM, LOW, INFO
+
+    Example:
+      webbreaker findings abc12345
+      webbreaker findings abc12345 -s CRITICAL
+    """
     from core.database import Database
     database = Database(db)
     database.connect()
@@ -393,7 +446,13 @@ def report(scan_id, fmt, output, severity, db):
 @click.option("--confirm", is_flag=True, help="Confirm deletion")
 @click.option("--db", default="webbreaker.db", help="Database file path")
 def delete(scan_id, confirm, db):
-    """Delete a scan and all its data."""
+    """Delete a scan and all its data.
+
+    Use --confirm to permanently remove scan data.
+
+    Example:
+      webbreaker delete abc12345 --confirm
+    """
     if not confirm:
         console.print("[yellow]Use --confirm to permanently delete scan data.[/]")
         return

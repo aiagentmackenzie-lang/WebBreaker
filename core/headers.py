@@ -1,9 +1,7 @@
 """Security Header analysis module — checks 25+ headers, CSP parsing, grade scoring."""
 
-import asyncio
 import re
 from datetime import datetime, timezone
-from typing import Optional
 
 from .config import Finding, Severity, FindingType, ScanConfig
 from .http_client import HttpClient
@@ -292,7 +290,6 @@ class HeaderScanner:
                         confidence=0.9,
                         timestamp=datetime.now(timezone.utc).isoformat(),
                     ))
-                max_age_match = None
                 match = re.search(r"max-age=(\d+)", value)
                 if match:
                     max_age = int(match.group(1))

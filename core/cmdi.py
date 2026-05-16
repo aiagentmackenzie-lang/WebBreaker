@@ -10,7 +10,6 @@ FP reduction strategy:
 """
 
 import re
-import asyncio
 import time
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from datetime import datetime, timezone
@@ -294,7 +293,7 @@ class CmdiScanner:
                             continue
 
                     if marker_found or error:
-                        evidence = f"Marker found" if marker_found else f"Error: {error[1]}"
+                        evidence = "Marker found" if marker_found else f"Error: {error[1]}"
                         findings.append(Finding(
                             finding_type=FindingType.CMDI,
                             severity=Severity.HIGH,

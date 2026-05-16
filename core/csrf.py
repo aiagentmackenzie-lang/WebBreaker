@@ -2,8 +2,7 @@
 
 import html
 import re
-import asyncio
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -185,7 +184,7 @@ class CSRFScanner:
             # 1. Missing CSRF token
             if not self._has_csrf_token(form):
                 severity = Severity.HIGH
-                poc = self._generate_poc_html(form, urlparse(base_url).netloc)
+                self._generate_poc_html(form, urlparse(base_url).netloc)  # PoC generated for future use
                 findings.append(Finding(
                     finding_type=FindingType.CSRF,
                     severity=severity,

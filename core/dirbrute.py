@@ -44,10 +44,6 @@ COMMON_EXTENSIONS = [
 ]
 
 
-from rich.console import Console
-
-console = Console()
-
 class DirBruteResult:
     def __init__(self, url, status_code, content_length, content_type, found_at):
         self.url = url

@@ -38,11 +38,6 @@ def _classify_reflection_context(payload: str, response_text: str) -> Optional[s
     if pos < 0:
         return None
 
-    # Get surrounding context (200 chars before and after)
-    start = max(0, pos - 200)
-    end = min(len(response_text), pos + len(payload) + 200)
-    context = response_text[start:end]
-
     # Check if we're inside a <script> block
     # Look for <script before the payload and no </script> between <script and payload
     before = response_text[:pos]
