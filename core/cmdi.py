@@ -68,8 +68,8 @@ OUTPUT_PAYLOADS = [
 BYPASS_PAYLOADS = [
     "; ec''ho CMDI_WEBBREAKER_7341",
     "| ec''ho CMDI_WEBBREAKER_7341",
-    r"; ec\ho CMDI_WEBBREAKER_7341",
-    "; ec%00ho CMDI_WEBBREAKER_7341",
+    '; ec\\ho CMDI_WEBBREAKER_7341',  # backslash escape: echo -> ec\ho
+    '; ec\x00ho CMDI_WEBBREAKER_7341',  # null byte bypass: ec\x00ho
     "|cmd /c echo CMDI_WEBBREAKER_7341",
     ";printf 'CMDI_WEBBREAKER_7341'",
     "|ping -c 1 127.0.0.1",
@@ -118,7 +118,11 @@ class CmdiScanner:
         params_dict = parse_qs(parsed.query)
         original_value = params_dict.get(param, [""])[0]
 
-        # 1. Time-based detection
+        # 1. Time-based detection — get baseline first
+        baseline_start = time.monotonic()
+        baseline_resp = await self.client.get(url)
+        baseline_time = time.monotonic() - baseline_start if baseline_resp else 2.0
+
         for payload in TIME_PAYLOADS_LINUX:
             test_value = original_value + payload
             if method == "GET":
@@ -133,7 +137,7 @@ class CmdiScanner:
                 resp = await self.client.post(url, data={param: test_value})
                 elapsed = time.monotonic() - start
 
-            if resp and elapsed >= 4.5:
+            if resp and elapsed >= max(4.5, baseline_time * 3):
                 findings.append(Finding(
                     finding_type=FindingType.CMDI,
                     severity=Severity.CRITICAL,

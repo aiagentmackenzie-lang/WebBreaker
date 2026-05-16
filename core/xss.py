@@ -1,6 +1,7 @@
 """XSS Scanner module — detects reflected, stored, and DOM-based XSS."""
 
 import re
+import hashlib
 import asyncio
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse, quote
 from datetime import datetime, timezone
@@ -152,7 +153,7 @@ class XSSScanner:
         for context, payloads in XSS_PAYLOADS.items():
             for payload in payloads:
                 # Create unique marker to detect exact reflection
-                marker = f"wb{abs(hash(payload)) % 99999}"
+                marker = f"wb{hashlib.md5(payload.encode()).hexdigest()[:8]}"
                 if "alert(1)" in payload:
                     marked_payload = payload.replace("alert(1)", f"alert({marker})")
                 elif payload.strip().startswith("<"):
@@ -252,9 +253,14 @@ class XSSScanner:
         for js in inline_scripts:
             dom_results = self._detect_dom_xss(js)
             for result in dom_results:
+                severity_str = result["risk"]
+                severity = {
+                    "HIGH": Severity.HIGH,
+                    "MEDIUM": Severity.MEDIUM,
+                }.get(severity_str, Severity.MEDIUM)
                 findings.append(Finding(
                     finding_type=FindingType.XSS,
-                    severity=Severity[result["risk"]],
+                    severity=severity,
                     url=url, parameter="[inline JS]", payload="DOM XSS",
                     evidence=f"Sources: {result['sources']}, Sinks: {result['sinks']}",
                     remediation="Sanitize DOM sources before passing to sinks. Use safe APIs like textContent.",
@@ -270,7 +276,7 @@ class XSSScanner:
                 for result in dom_results:
                     findings.append(Finding(
                         finding_type=FindingType.XSS,
-                        severity=Severity[result["risk"]],
+                        severity=severity,
                         url=js_url, parameter="[external JS]", payload="DOM XSS",
                         evidence=f"Sources: {result['sources']}, Sinks: {result['sinks']}",
                         remediation="Sanitize DOM sources before passing to sinks. Review JS dependencies.",

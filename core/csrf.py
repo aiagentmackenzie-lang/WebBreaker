@@ -52,14 +52,14 @@ class CSRFScanner:
             value = tf.get("value", "")
             # Check for short/predictable tokens
             if len(value) < 16:
-                return f"Short token ({len(value)} chars): {value[:8]}..."
+                issues.append(f"Short token ({len(value)} chars): {value[:8]}...")
             # Check for numeric-only tokens
             if value.isdigit():
-                return f"Numeric-only token: {value}"
+                issues.append(f"Numeric-only token: {value}")
             # Check for common patterns
             if re.match(r"^[a-f0-9]{8}$", value):
-                return f"8-char hex token (low entropy): {value}"
-        return None
+                issues.append(f"8-char hex token (low entropy): {value}")
+        return issues[0] if issues else None
 
     async def _check_same_site_cookies(self, url: str) -> list[dict]:
         """Analyze cookie SameSite attributes."""
@@ -68,11 +68,19 @@ class CSRFScanner:
             return []
 
         cookies_analysis = []
+        # httpx stores Set-Cookie as multi-value header
         set_cookie_headers = resp.headers.get_list("set-cookie") if hasattr(resp.headers, "get_list") else []
         if not set_cookie_headers:
-            sc = resp.headers.get("set-cookie", "")
-            if sc:
-                set_cookie_headers = [sc]
+            # Fallback: parse from raw headers
+            raw = resp.headers.get("set-cookie", "")
+            if raw:
+                # httpx may join multiple Set-Cookie with commas, try to split
+                # but only if values don't contain commas
+                if ", " in raw:
+                    # Naive split — may incorrectly split cookie values with commas
+                    set_cookie_headers = [h.strip() for h in raw.split(", ") if "=" in h.split(";")[0]]
+                else:
+                    set_cookie_headers = [raw]
 
         for cookie_header in set_cookie_headers:
             parts = [p.strip().lower() for p in cookie_header.split(";")]

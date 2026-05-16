@@ -102,7 +102,14 @@ class ScanOrchestrator:
 
             # Phase 2: Run vulnerability scanners
             urls = [r.url for r in recon_data] if recon_data else [self.config.target]
-            forms = recon_data[0].forms if recon_data and recon_data else []
+            # Collect forms from ALL recon results, not just the first one
+            if recon_data:
+                forms = []
+                for r in recon_data:
+                    if r.forms:
+                        forms.extend(r.forms)
+            else:
+                forms = []
 
             scan_modules = [m for m in modules if m != "recon"]
 
@@ -159,6 +166,9 @@ class ScanOrchestrator:
                     for url in urls:
                         findings = await scanner.scan_url(url)
                         all_findings.extend(findings)
+                    if forms:
+                        form_findings = await scanner.scan_forms(forms)
+                        all_findings.extend(form_findings)
                     await scanner.close()
 
                 elif module_name == "rfi":
@@ -166,6 +176,9 @@ class ScanOrchestrator:
                     for url in urls:
                         findings = await scanner.scan_url(url)
                         all_findings.extend(findings)
+                    if forms:
+                        form_findings = await scanner.scan_forms(forms)
+                        all_findings.extend(form_findings)
                     await scanner.close()
 
                 elif module_name == "dirbrute":

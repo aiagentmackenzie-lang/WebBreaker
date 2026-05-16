@@ -9,6 +9,9 @@ from collections import defaultdict
 
 from .config import Finding, Severity, FindingType, ScanConfig
 from .http_client import HttpClient
+from rich.console import Console
+
+console = Console()
 
 
 # Built-in wordlists
@@ -40,6 +43,10 @@ COMMON_EXTENSIONS = [
     ".zip", ".tar.gz", ".rar", ".sql", ".env",
 ]
 
+
+from rich.console import Console
+
+console = Console()
 
 class DirBruteResult:
     def __init__(self, url, status_code, content_length, content_type, found_at):

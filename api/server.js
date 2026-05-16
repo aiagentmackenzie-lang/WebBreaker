@@ -115,6 +115,20 @@ app.register(async function (fastify) {
         if (subs) { subs.delete(conn.socket); if (subs.size === 0) scanSubscribers.delete(conn.socket.scanId); }
       }
     });
+
+    // Clean up stale subscribers every 5 minutes
+    if (!scanSubscribers._cleanupInterval) {
+      scanSubscribers._cleanupInterval = setInterval(() => {
+        for (const [scanId, subs] of scanSubscribers) {
+          for (const ws of subs) {
+            if (ws.readyState === 3) { // CLOSED
+              subs.delete(ws);
+            }
+          }
+          if (subs.size === 0) scanSubscribers.delete(scanId);
+        }
+      }, 5 * 60 * 1000);
+    }
   });
 });
 

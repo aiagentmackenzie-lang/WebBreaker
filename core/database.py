@@ -63,9 +63,20 @@ class Database:
         self.path = path
         self._conn: Optional[sqlite3.Connection] = None
 
+    def __enter__(self):
+        self.connect()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
     def connect(self):
         self._conn = sqlite3.connect(self.path)
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
+        self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(SCHEMA)
 
     def close(self):

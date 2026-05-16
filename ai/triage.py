@@ -33,6 +33,9 @@ class AITriage:
         self.model = model
         self.ollama_host = ollama_host
         self._client = None
+        # Note: The default model name 'webbreaker-triage' must be pulled/created in Ollama first.
+        # Run: ollama pull llama3.2  (or your preferred model)
+        # Then set model='llama3.2' when instantiating AITriage.
 
     def _get_client(self):
         if self._client is None:

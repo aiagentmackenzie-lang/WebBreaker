@@ -2,6 +2,7 @@
 
 import re
 import asyncio
+from collections import deque
 from urllib.parse import urljoin, urlparse, parse_qs, urlencode
 from typing import Optional
 from bs4 import BeautifulSoup
@@ -12,20 +13,20 @@ from .http_client import HttpClient
 
 # Tech fingerprint signatures
 TECH_SIGNATURES = {
-    "PHP": [r"\.php", r"X-Powered-By: PHP", r"PHPSESSID"],
-    "ASP.NET": [r"\.aspx?", r"X-AspNet-Version", r"__VIEWSTATE", r"ASP.NET_SessionId"],
-    "Django": [r"csrfmiddlewaretoken", r"X-Frame-Options: DENY", r"djdt"],
-    "Flask": [r"flask", r"X-Session-Id"],
-    "Express": [r"X-Powered-By: Express", r"etag: W/"],
-    "Nginx": [r"Server: nginx", r"nginx/"],
-    "Apache": [r"Server: Apache", r"apache/"],
+    "PHP": [r"\.php\b", r"X-Powered-By:\s*PHP", r"PHPSESSID"],
+    "ASP.NET": [r"\.aspx?\b", r"X-AspNet-Version", r"__VIEWSTATE", r"ASP\.NET_SessionId"],
+    "Django": [r"csrfmiddlewaretoken", r"X-Frame-Options:\s*DENY", r"\bdjdt\b"],
+    "Flask": [r"\bflask\b", r"X-Session-Id"],
+    "Express": [r"X-Powered-By:\s*Express", r"\betag:\s*W/"],
+    "Nginx": [r"Server:\s*nginx", r"nginx/"],
+    "Apache": [r"Server:\s*Apache", r"apache/"],
     "WordPress": [r"wp-content", r"wp-includes", r"wp-json"],
-    "jQuery": [r"jquery", r"jQuery v"],
-    "React": [r"__NEXT_DATA__", r"_next/", r"react", r"data-reactroot"],
-    "Vue": [r"vue", r"data-v-", r"__vue__"],
-    "Laravel": [r"laravel_session", r"XSRF-TOKEN", r"laravel"],
+    "jQuery": [r"\bjquery\b", r"jQuery\s*v"],
+    "React": [r"__NEXT_DATA__", r"_next/", r"\bReact\b", r"data-reactroot"],
+    "Vue": [r"\bvue\b", r"data-v-", r"__vue__"],
+    "Laravel": [r"laravel_session", r"XSRF-TOKEN", r"\blaravel\b"],
     "Ruby on Rails": [r"csrf-token", r"authenticity_token", r"X-Runtime"],
-    "Spring Boot": [r"X-Application-Context", r"spring"],
+    "Spring Boot": [r"X-Application-Context", r"\bspring\b"],
 }
 
 
@@ -121,12 +122,12 @@ class ReconScanner:
 
     async def spider(self, start_url: str, callback=None) -> list[ReconResult]:
         """Crawl the target site up to configured depth."""
-        queue = [(start_url, 0)]
+        queue = deque([(start_url, 0)])
         self.visited = set()
         self.results = []
 
         while queue:
-            url, depth = queue.pop(0)
+            url, depth = queue.popleft()
             if url in self.visited or depth > self.config.depth:
                 continue
             if not self._in_scope(url):

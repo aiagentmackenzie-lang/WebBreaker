@@ -20,7 +20,7 @@ FUZZ_PAYLOADS = {
         "%s%s%s%s", "%x%x%x%x",
     ],
     "null_bytes": [
-        "test%00", "%00", "test\x00", "test%00.jpg",
+        "test%00", "%00", "test\x00.jpg",
     ],
     "type_juggling": [
         "0", "1", "-1", "0.0", "true", "false", "null", "[]", "{}",

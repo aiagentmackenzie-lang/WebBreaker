@@ -224,6 +224,12 @@ class SQLiScanner:
                 break
 
         # 3. Time-based detection
+        # Get baseline response time first
+        baseline_time = None
+        baseline_start = time.monotonic()
+        baseline_resp = await self.client.get(url)
+        baseline_time = time.monotonic() - baseline_start if baseline_resp else 2.0
+
         for payload in TIME_PAYLOADS:
             test_value = original_value + payload
             start = time.monotonic()
@@ -236,7 +242,8 @@ class SQLiScanner:
                 resp = await self.client.post(url, data={param: test_value})
             elapsed = time.monotonic() - start
 
-            if resp and elapsed >= 4.5:
+            # Require at least 3x baseline time AND at least 4.5s absolute
+            if resp and elapsed >= max(4.5, baseline_time * 3):
                 findings.append(Finding(
                     finding_type=FindingType.SQLI,
                     severity=Severity.HIGH,
@@ -282,7 +289,7 @@ class SQLiScanner:
                 if findings:
                     break
 
-        self.findings = findings
+        self.findings.extend(findings)
         return findings
 
     async def scan_url(self, url: str, params: list[dict] = None) -> list[Finding]:

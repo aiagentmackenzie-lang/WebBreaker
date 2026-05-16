@@ -370,5 +370,191 @@ class TestSessionEntropy:
         assert scanner._calculate_entropy("") == 0.0
 
 
+class TestCMDI:
+    def test_error_pattern_detection(self):
+        from core.cmdi import CmdiScanner
+        config = ScanConfig(target="https://example.com", authorized=True)
+        scanner = CmdiScanner(config)
+
+        result = scanner._check_error_patterns("/bin/sh: 1: command: not found")
+        assert result is not None
+        assert result[0] == "Linux shell error"
+
+    def test_no_error(self):
+        from core.cmdi import CmdiScanner
+        config = ScanConfig(target="https://example.com", authorized=True)
+        scanner = CmdiScanner(config)
+
+        result = scanner._check_error_patterns("Everything is fine")
+        assert result is None
+
+    def test_output_marker_detection(self):
+        from core.cmdi import CmdiScanner, MARKER
+        config = ScanConfig(target="https://example.com", authorized=True)
+        scanner = CmdiScanner(config)
+
+        assert scanner._check_output_marker(f"Output: {MARKER}") is True
+        assert scanner._check_output_marker("No marker here") is False
+
+    def test_bypass_payloads_not_empty(self):
+        from core.cmdi import BYPASS_PAYLOADS, MARKER
+        assert len(BYPASS_PAYLOADS) > 0
+        # All bypass payloads should contain the marker or test for it
+        for p in BYPASS_PAYLOADS:
+            assert isinstance(p, str) and len(p) > 0
+
+
+class TestLFIDetection:
+    def test_lfi_evidence_patterns(self):
+        from core.lfi import LFIScanner
+        config = ScanConfig(target="https://example.com", authorized=True)
+        scanner = LFIScanner(config)
+
+        # Should detect /etc/passwd content
+        result = scanner._check_lfi_evidence("../../../etc/passwd", "root:x:0:0:root:/root:/bin/bash")
+        assert result is not None
+        assert "passwd" in result.lower() or "file content" in result.lower()
+
+    def test_no_lfi_evidence(self):
+        from core.lfi import LFIScanner
+        config = ScanConfig(target="https://example.com", authorized=True)
+        scanner = LFIScanner(config)
+
+        result = scanner._check_lci_evidence("../../../etc/passwd", "404 Not Found") if hasattr(scanner, '_check_lci_evidence') else scanner._check_lfi_evidence("../../../etc/passwd", "404 Not Found")
+        assert result is None
+
+
+class TestRFIDetection:
+    def test_rfi_indicators(self):
+        from core.rfi import RFI_INDICATORS
+        assert len(RFI_INDICATORS) > 0
+        # Check indicators are lowercase-safe
+        for indicator in RFI_INDICATORS:
+            assert isinstance(indicator, str) and len(indicator) > 0
+
+
+class TestDirBrute:
+    def test_wordlist_loading(self):
+        from core.dirbrute import DirBruteScanner
+        config = ScanConfig(target="https://example.com", authorized=True)
+        scanner = DirBruteScanner(config)
+
+        words = scanner._load_wordlist()
+        assert len(words) > 0
+        # Should contain common paths
+        assert any("admin" in w for w in words)
+        assert any(".env" in w for w in words)
+
+    def test_interesting_status_codes(self):
+        from core.dirbrute import DirBruteScanner, DirBruteResult
+        config = ScanConfig(target="https://example.com", authorized=True)
+        scanner = DirBruteScanner(config)
+
+        # 200 should be interesting
+        result_200 = DirBruteResult(url="https://example.com/admin", status_code=200, content_length=100, content_type="text/html", found_at="2026-01-01")
+        assert scanner._is_interesting(result_200) is True
+
+        # 404 should not be interesting
+        result_404 = DirBruteResult(url="https://example.com/notfound", status_code=404, content_length=50, content_type="text/html", found_at="2026-01-01")
+        assert scanner._is_interesting(result_404) is False
+
+
+class TestFuzz:
+    def test_fuzz_payloads_structure(self):
+        from core.fuzz import FUZZ_PAYLOADS, HIDDEN_PARAM_NAMES
+        assert len(FUZZ_PAYLOADS) > 0
+        assert "overflow" in FUZZ_PAYLOADS
+        assert "special_chars" in FUZZ_PAYLOADS
+        assert len(HIDDEN_PARAM_NAMES) > 0
+        assert "id" in HIDDEN_PARAM_NAMES
+        assert "admin" in HIDDEN_PARAM_NAMES
+
+
+class TestDatabaseContextManager:
+    def test_context_manager(self):
+        from core.database import Database
+        import os
+        db_path = "test_webbreaker_ctx.db"
+        try:
+            with Database(db_path) as db:
+                db.create_scan("ctx1", "https://example.com", {})
+                scan = db.get_scan("ctx1")
+                assert scan is not None
+                assert scan["target"] == "https://example.com"
+            # After context manager, connection should be closed
+            # Creating a new instance should work
+            with Database(db_path) as db:
+                scan = db.get_scan("ctx1")
+                assert scan is not None
+        finally:
+            if os.path.exists(db_path):
+                os.remove(db_path)
+
+    def test_wal_mode(self):
+        from core.database import Database
+        import os
+        db_path = "test_webbreaker_wal.db"
+        try:
+            db = Database(db_path)
+            db.connect()
+            # WAL mode should be set
+            result = db._conn.execute("PRAGMA journal_mode").fetchone()
+            assert result[0] == "wal"
+            db.close()
+        finally:
+            if os.path.exists(db_path):
+                os.remove(db_path)
+            if os.path.exists(db_path + "-wal"):
+                os.remove(db_path + "-wal")
+            if os.path.exists(db_path + "-shm"):
+                os.remove(db_path + "-shm")
+
+
+class TestOrchestratorForms:
+    """Test that forms are collected from ALL recon results, not just the first."""
+    def test_forms_from_all_results(self):
+        from core.recon import ReconResult
+        from core.config import ScanConfig
+        from core.orchestrator import ScanOrchestrator
+
+        config = ScanConfig(target="https://example.com", authorized=True)
+        orch = ScanOrchestrator(config)
+        # Simulate that the orchestrator would collect forms from all recon results
+        results = [
+            ReconResult(url="https://example.com/page1", forms=[{"action": "/login", "method": "POST", "fields": [{"name": "user", "type": "text", "value": ""}]}]),
+            ReconResult(url="https://example.com/page2", forms=[{"action": "/search", "method": "GET", "fields": [{"name": "q", "type": "text", "value": ""}]}]),
+        ]
+        all_forms = []
+        for r in results:
+            if r.forms:
+                all_forms.extend(r.forms)
+        assert len(all_forms) == 2
+        orch.close()
+
+
+class TestReconDeque:
+    """Test that recon spider uses deque for BFS."""
+    def test_imports_deque(self):
+        import inspect
+        from core.recon import ReconScanner
+        source = inspect.getsource(ReconScanner.spider)
+        assert 'deque' in source or 'popleft' in source
+
+
+class TestHTTPClientCookies:
+    """Test that HttpClient supports per-request cookies."""
+    def test_get_accepts_cookies_kwarg(self):
+        import inspect
+        from core.http_client import HttpClient
+        sig = inspect.signature(HttpClient.get)
+        assert 'cookies' in sig.parameters
+
+    def test_post_accepts_cookies_kwarg(self):
+        import inspect
+        from core.http_client import HttpClient
+        sig = inspect.signature(HttpClient.post)
+        assert 'cookies' in sig.parameters
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

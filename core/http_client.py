@@ -31,6 +31,10 @@ class HttpClient:
                 follow_redirects=True,
                 verify=False,
             )
+        if not config.proxy:
+            import warnings
+            warnings.filterwarnings("ignore", message="Unverified HTTPS request")
+        console.print("[dim yellow]⚠ TLS verification disabled — all certificate errors ignored[/dim yellow]")
         return self._client
 
     async def _rate_limit(self):
@@ -43,31 +47,41 @@ class HttpClient:
                 await asyncio.sleep(self._min_interval - elapsed)
             self._last_request_time = time.monotonic()
 
-    async def get(self, url: str, **kwargs) -> httpx.Response:
+    async def get(self, url: str, *, cookies: dict = None, **kwargs) -> httpx.Response:
         await self._rate_limit()
         client = await self._get_client()
         try:
-            resp = await client.get(url, **kwargs)
+            # Merge per-request cookies with config cookies
+            req_cookies = dict(self.config.cookies or {})
+            if cookies:
+                req_cookies.update(cookies)
+            resp = await client.get(url, cookies=req_cookies or None, **kwargs)
             return resp
         except httpx.RequestError as e:
             console.print(f"[dim]Request error: {e}[/dim]")
             return None
 
-    async def post(self, url: str, **kwargs) -> httpx.Response:
+    async def post(self, url: str, *, cookies: dict = None, **kwargs) -> httpx.Response:
         await self._rate_limit()
         client = await self._get_client()
         try:
-            resp = await client.post(url, **kwargs)
+            req_cookies = dict(self.config.cookies or {})
+            if cookies:
+                req_cookies.update(cookies)
+            resp = await client.post(url, cookies=req_cookies or None, **kwargs)
             return resp
         except httpx.RequestError as e:
             console.print(f"[dim]Request error: {e}[/dim]")
             return None
 
-    async def request(self, method: str, url: str, **kwargs) -> httpx.Response:
+    async def request(self, method: str, url: str, *, cookies: dict = None, **kwargs) -> httpx.Response:
         await self._rate_limit()
         client = await self._get_client()
         try:
-            resp = await client.request(method, url, **kwargs)
+            req_cookies = dict(self.config.cookies or {})
+            if cookies:
+                req_cookies.update(cookies)
+            resp = await client.request(method, url, cookies=req_cookies or None, **kwargs)
             return resp
         except httpx.RequestError as e:
             console.print(f"[dim]Request error: {e}[/dim]")
