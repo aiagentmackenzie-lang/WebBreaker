@@ -1,0 +1,5 @@
+# Pin the rule set explicitly — ruff 0.16 broadened the default `select`
+# from E4/E7/E9/F to a much broader set, which fails CI on every push.
+# E4/E7/E9/F is the historical default set CI greened with.
+[lint]
+select = ["E4", "E7", "E9", "F"]
